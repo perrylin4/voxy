@@ -120,7 +120,8 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
 
         //Do alpha blending
         //Unbelievably jank hack, only blit out to the framebuffer if we are rendering fog
-        if (!fogCoversAllRendering) {
+        boolean forceDepthBlit = VoxyConfig.CONFIG.isRenderingEnabled() && VoxyConfig.CONFIG.lodDistance < 64;
+        if (!fogCoversAllRendering || forceDepthBlit) {
             glEnable(GL_BLEND);
             glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
             AbstractRenderPipeline.transformBlitDepth(this.finalBlit, this.fb.getDepthTex().id, sourceFrameBuffer, viewport, new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView));
