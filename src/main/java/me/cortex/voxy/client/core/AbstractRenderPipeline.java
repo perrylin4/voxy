@@ -37,7 +37,6 @@ import static org.lwjgl.opengl.GL30C.GL_DEPTH24_STENCIL8;
 import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
 import static org.lwjgl.opengl.GL30C.glBindFramebuffer;
 import static org.lwjgl.opengl.GL42.GL_LEQUAL;
-import static org.lwjgl.opengl.GL42.GL_NOTEQUAL;
 import static org.lwjgl.opengl.GL42.glDepthFunc;
 import static org.lwjgl.opengl.GL42.*;
 import static org.lwjgl.opengl.GL45.glClearNamedFramebufferfi;
@@ -131,11 +130,9 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
     protected void initDepthStencil(int sourceFrameBuffer, int targetFb, int srcWidth, int srcHeight, int width, int height) {
         glClearNamedFramebufferfi(targetFb, GL_DEPTH_STENCIL, 0, 1.0f, 1);
-        // using blit to copy depth from mismatched depth formats is not portable so instead a full screen pass is performed for a depth copy
-        // the mismatched formats in this case is the d32 to d24s8
+
         glBindFramebuffer(GL30.GL_FRAMEBUFFER, targetFb);
 
-        //If pixel passes, update stencil to 0 and set depth to 0
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_ALWAYS);
 
@@ -158,7 +155,6 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         glDepthFunc(GL_LEQUAL);
         glColorMask(true,true,true,true);
 
-        //Make voxy terrain render only where there isnt mc terrain
         glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
         glStencilFunc(GL_EQUAL, 1, 0xFF);
     }

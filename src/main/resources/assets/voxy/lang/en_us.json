@@ -22,6 +22,10 @@
   "voxy.config.general.subDivisionSize": "Pixels^2 of subdivision size",
   "voxy.config.general.subDivisionSize.tooltip": "Maximum size in pixels (squared) of screenspace AABB before subdiving to smaller LoDs (Smaller being higher quality)",
 
+  "voxy.config.general.lodDistance": "LOD Distance",
+  "voxy.config.general.lodDistance.tooltip": "Chunks past this distance will be replaced by Voxy LOD rendering. Values at or above your vanilla render distance have no effect.",
+  "voxy.config.general.lodDistance.vanilla": "Vanilla",
+
   "voxy.config.general.renderDistance": "Render distance",
   "voxy.config.general.renderDistance.tooltip": "Render distance of voxy in chunks",
 

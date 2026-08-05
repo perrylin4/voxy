@@ -6,7 +6,6 @@ import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.common.world.service.VoxelIngestService;
 import me.cortex.voxy.commonImpl.VoxyCommon;
-import me.cortex.voxy.commonImpl.WorldIdentifier;
 import me.jellysquid.mods.sodium.client.gl.device.CommandList;
 import me.jellysquid.mods.sodium.client.render.chunk.RenderSection;
 import me.jellysquid.mods.sodium.client.render.chunk.RenderSectionManager;
@@ -29,6 +28,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(value = RenderSectionManager.class, remap = false)
 public class MixinRenderSectionManager {
@@ -39,13 +39,29 @@ public class MixinRenderSectionManager {
 
     @Shadow @Final private ChunkBuilder builder;
 
+    @Inject(method = "getSearchDistance", at = @At("RETURN"), cancellable = true)
+    private void voxy$capSearchDistance(CallbackInfoReturnable<Float> cir) {
+        int lod = VoxyConfig.CONFIG.lodDistance;
+        if (VoxyConfig.CONFIG.isRenderingEnabled() && lod < 64) {
+            float capped = lod * 16.0f;
+            if (capped < cir.getReturnValue()) {
+                cir.setReturnValue(capped);
+            }
+        }
+    }
+
+    @Inject(method = "isSectionVisible(III)Z", at = @At("RETURN"), cancellable = true)
+    private void voxy$fixSectionVisibility(int x, int y, int z, CallbackInfoReturnable<Boolean> cir) {
+        if (!cir.getReturnValue() && VoxyConfig.CONFIG.isRenderingEnabled() && VoxyConfig.CONFIG.lodDistance < 64) {
+            cir.setReturnValue(true);
+        }
+    }
+
     @Inject(method = "<init>", at = @At("TAIL"))
     private void voxy$resetChunkTracker(ClientLevel level, int renderDistance, CommandList commandList, CallbackInfo ci) {
-        if (level.levelRenderer != null) {
-            var system = ((IGetVoxyRenderSystem)(level.levelRenderer)).voxy$getRenderSystem();
-            if (system != null) {
-                system.chunkBoundRenderer.reset();
-            }
+        var system = ((IGetVoxyRenderSystem) (level.levelRenderer)).voxy$getRenderSystem();
+        if (system != null) {
+            system.chunkBoundRenderer.reset();
         }
         this.bottomSectionY = this.world.getMinBuildHeight()>>4;
     }
@@ -55,11 +71,9 @@ public class MixinRenderSectionManager {
         //TODO: Am not quite sure if this is right
         if (VoxyConfig.CONFIG.ingestEnabled && !BOBBY_INSTALLED) {
             var cccm = (ICheekyClientChunkCache)this.world.getChunkSource();
-            if (cccm != null) {
-                var chunk = cccm.voxy$cheekyGetChunk(x, z);
-                if (chunk != null) {
-                    VoxelIngestService.tryAutoIngestChunk(chunk);
-                }
+            var chunk = cccm.voxy$cheekyGetChunk(x, z);
+            if (chunk != null) {
+                VoxelIngestService.tryAutoIngestChunk(chunk);
             }
         }
     }
@@ -174,6 +188,5 @@ public class MixinRenderSectionManager {
                 }
             }
         }
-        return;
     }
 }

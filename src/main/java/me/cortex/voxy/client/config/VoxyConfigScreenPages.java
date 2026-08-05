@@ -5,13 +5,11 @@ import me.cortex.voxy.client.ClientSessionEvents;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.SSAO;
 import me.cortex.voxy.client.core.util.IrisUtil;
-import me.cortex.voxy.client.mixin.sodium.AccessorSodiumWorldRenderer;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.jellysquid.mods.sodium.client.gui.options.*;
 import me.jellysquid.mods.sodium.client.gui.options.control.CyclingControl;
 import me.jellysquid.mods.sodium.client.gui.options.control.SliderControl;
 import me.jellysquid.mods.sodium.client.gui.options.control.TickBoxControl;
-import me.jellysquid.mods.sodium.client.render.SodiumWorldRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
@@ -120,6 +118,17 @@ public abstract class VoxyConfigScreenPages {
                             }
                             try { IrisUtil.reload(); } catch (Throwable ignored) {}
                         }, s -> s.enableRendering)
+                        .setImpact(OptionImpact.HIGH)
+                        .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
+                        .build()
+                ).add(OptionImpl.createBuilder(int.class, storage)
+                        .setName(Component.translatable("voxy.config.general.lodDistance"))
+                        .setTooltip(Component.translatable("voxy.config.general.lodDistance.tooltip"))
+                        .setControl(opt -> new SliderControl(opt, 2, 64, 1, v -> {
+                            if (v == 64) return Component.translatable("voxy.config.general.lodDistance.vanilla");
+                            return Component.literal(Integer.toString(v));
+                        }))
+                        .setBinding((s, v) -> s.lodDistance = v, s -> s.lodDistance)
                         .setImpact(OptionImpact.HIGH)
                         .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
                         .build()
