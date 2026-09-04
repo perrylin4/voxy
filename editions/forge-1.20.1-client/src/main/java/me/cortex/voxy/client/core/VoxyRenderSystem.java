@@ -5,6 +5,7 @@ import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 
 import me.cortex.voxy.client.TimingStatistics;
+import me.cortex.voxy.client.VoxyChunkReloadState;
 import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.gl.Capabilities;
@@ -260,6 +261,12 @@ public class VoxyRenderSystem {
     }
 
     public void renderOpaque(Viewport<?> viewport) {
+        // Never draw Voxy terrain while F3+A is reloading chunks. This is a
+        // safety net even if another render path forgets to check the state.
+        if (VoxyChunkReloadState.isRenderingSuppressed()) {
+            return;
+        }
+
         // Blindness and darkness deliberately remove distant terrain. Rendering
         // LOD behind vanilla's collapsed fog makes both effects ineffective.
         if (visionEffectPresent()) {
