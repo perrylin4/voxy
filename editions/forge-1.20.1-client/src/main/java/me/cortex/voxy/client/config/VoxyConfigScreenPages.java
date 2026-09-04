@@ -157,6 +157,17 @@ public abstract class VoxyConfigScreenPages {
                         .setImpact(OptionImpact.HIGH)
                         .build()
                 ).add(OptionImpl.createBuilder(int.class, storage)
+                        .setName(Component.translatable("voxy.config.general.lodDistance"))
+                        .setTooltip(Component.translatable("voxy.config.general.lodDistance.tooltip"))
+                        .setControl(opt -> new SliderControl(opt, 2, 64, 1, v -> {
+                            if (v == 64) return Component.translatable("voxy.config.general.lodDistance.vanilla");
+                            return Component.literal(Integer.toString(v));
+                        }))
+                        .setBinding((s, v) -> s.lodDistance = v, s -> s.lodDistance)
+                        .setImpact(OptionImpact.HIGH)
+                        .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
+                        .build()
+                ).add(OptionImpl.createBuilder(int.class, storage)
                         .setName(Component.translatable("voxy.config.general.renderDistance"))
                         .setTooltip(Component.translatable("voxy.config.general.renderDistance.tooltip"))
                         // Range: 10 to MAX_RENDER_DISTANCE. Display: v*2

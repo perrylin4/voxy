@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.mixin.sodium;
 
 import me.cortex.voxy.client.ICheekyClientChunkCache;
+import me.cortex.voxy.client.VoxyChunkReloadState;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
@@ -27,12 +28,31 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(value = RenderSectionManager.class, remap = false)
 public class MixinRenderSectionManager {
     @Shadow(aliases = "world") @Final private ClientLevel level;
 
     @Shadow @Final private ChunkBuilder builder;
+
+    @Inject(method = "getSearchDistance", at = @At("RETURN"), cancellable = true)
+    private void voxy$capSearchDistance(CallbackInfoReturnable<Float> cir) {
+        int lod = VoxyConfig.CONFIG.lodDistance;
+        if (VoxyConfig.CONFIG.isRenderingEnabled() && lod < 64) {
+            float capped = lod * 16.0f;
+            if (capped < cir.getReturnValue()) {
+                cir.setReturnValue(capped);
+            }
+        }
+    }
+
+    @Inject(method = "isSectionVisible(III)Z", at = @At("RETURN"), cancellable = true)
+    private void voxy$fixSectionVisibility(int x, int y, int z, CallbackInfoReturnable<Boolean> cir) {
+        if (!cir.getReturnValue() && VoxyConfig.CONFIG.isRenderingEnabled() && VoxyConfig.CONFIG.lodDistance < 64) {
+            cir.setReturnValue(true);
+        }
+    }
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void voxy$resetChunkTracker(
@@ -55,7 +75,7 @@ public class MixinRenderSectionManager {
     @Inject(method = "onChunkRemoved", at = @At("HEAD"))
     private void voxy$injectIngest(int x, int z, CallbackInfo ci) {
         //TODO: Am not quite sure if this is right
-        if (VoxyConfig.CONFIG.ingestEnabled && !VoxyCommon.getPlatformUtil().isModLoaded("bobby")) {
+        if (VoxyConfig.CONFIG.ingestEnabled && !VoxyChunkReloadState.isIngestSuppressed() && !VoxyCommon.getPlatformUtil().isModLoaded("bobby")) {
             var cccm = (ICheekyClientChunkCache)this.level.getChunkSource();
             if (cccm != null) {
                 var chunk = cccm.voxy$cheekyGetChunk(x, z);
@@ -69,7 +89,7 @@ public class MixinRenderSectionManager {
 
     @Inject(method = "onChunkAdded", at = @At("HEAD"))
     private void voxy$ingestOnAdd(int x, int z, CallbackInfo ci) {
-        if (this.level.levelRenderer != null && VoxyConfig.CONFIG.ingestEnabled) {
+        if (this.level.levelRenderer != null && VoxyConfig.CONFIG.ingestEnabled && !VoxyChunkReloadState.isIngestSuppressed()) {
             var cccm = this.level.getChunkSource();
             if (cccm != null) {
                 var chunk = cccm.getChunk(x, z, ChunkStatus.FULL, false);
@@ -137,7 +157,7 @@ public class MixinRenderSectionManager {
         }
         int x = instance.getChunkX(), y = instance.getChunkY(), z = instance.getChunkZ();
 
-        if (wasBuilt && VoxyConfig.CONFIG.ingestEnabled) {
+        if (wasBuilt && VoxyConfig.CONFIG.ingestEnabled && !VoxyChunkReloadState.isIngestSuppressed()) {
             var tracker = ((AccessorChunkTracker) ChunkTrackerHolder.get(this.level)).getChunkStatus();
             //in theory the cache value could be wrong but is so soso unlikely and at worst means we either duplicate ingest a chunk
             // which... could be bad ;-; or we dont ingest atall which is ok!

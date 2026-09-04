@@ -35,7 +35,7 @@ if (-not $javaHome) {
     }
 }
 if (-not $javaHome) {
-    $currentJava = & java -version 2>&1 | Select-Object -First 1
+    $currentJava = (cmd /c "java -version 2>&1" | Select-Object -First 1)
     $javaPattern = 'version "?{0}(?:[."]|$)' -f $target.Java
     if ($currentJava -notmatch $javaPattern) {
         throw "JDK $($target.Java) is required. Set $javaVariable before building $Edition."

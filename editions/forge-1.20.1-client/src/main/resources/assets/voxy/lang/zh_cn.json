@@ -26,6 +26,10 @@
   "voxy.config.general.rendering": "Voxy渲染",
   "voxy.config.general.rendering.tooltip": "启用或禁用Voxy渲染",
 
+  "voxy.config.general.lodDistance": "LOD距离",
+  "voxy.config.general.lodDistance.tooltip": "超过该距离的区块将使用Voxy LOD渲染；数值大于等于当前原版渲染距离时不生效。",
+  "voxy.config.general.lodDistance.vanilla": "原版",
+
   "voxy.config.general.subDivisionSize": "细分尺寸像素^2",
   "voxy.config.general.subDivisionSize.tooltip": "屏幕空间AABB的最大像素（平方）尺寸，超过此值将细分至更小的LoD（数值越小质量越高）",
 

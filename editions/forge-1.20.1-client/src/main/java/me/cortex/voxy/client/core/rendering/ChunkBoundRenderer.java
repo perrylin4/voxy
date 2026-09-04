@@ -3,6 +3,7 @@ package me.cortex.voxy.client.core.rendering;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import me.cortex.voxy.client.core.AbstractRenderPipeline;
+import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlVertexArray;
@@ -117,7 +118,14 @@ public class ChunkBoundRenderer {
         long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 128);
         long matPtr = ptr; ptr += 4*4*4;
 
-        final float renderDistance = Minecraft.getInstance().options.getEffectiveRenderDistance()*16;//In blocks
+        final float renderDistance;
+        int lod = VoxyConfig.CONFIG.lodDistance;
+        int vanillaRD = Minecraft.getInstance().options.getEffectiveRenderDistance();
+        if (VoxyConfig.CONFIG.isRenderingEnabled() && lod < 64 && lod < vanillaRD) {
+            renderDistance = lod * 16f;
+        } else {
+            renderDistance = vanillaRD * 16f;
+        }
 
         {//This is recomputed to be in chunk section space not worldsection
 
@@ -375,6 +383,8 @@ public class ChunkBoundRenderer {
 
     public void reset() {
         this.chunk2idx.clear();
+        this.addQueue.clear();
+        this.remQueue.clear();
         this.visibleSectionCount = 0;
         this.pendingVisibleSectionCount = 0;
         this.pendingVisibleRenderLists = null;

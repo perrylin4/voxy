@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.mixin.minecraft;
 
 import me.cortex.voxy.client.VoxyClientInstance;
+import me.cortex.voxy.client.VoxyChunkReloadState;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
@@ -29,11 +30,28 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
         return this.renderer;
     }
 
+    @Inject(method = "allChanged()V", at = @At("HEAD"))
+    private void voxy$beginChunkReload(CallbackInfo ci) {
+        // F3+A / resource reload will make Embeddium rebuild the render
+        // section manager and re-add every ready chunk. Suppress automatic
+        // chunk ingestion during that storm so it does not block the render
+        // thread; chunks loaded normally after this window are unaffected.
+        // Suppress ingest and Voxy terrain drawing while the chunk reload storm is active,
+        // so holding F3+A behaves like vanilla (almost no terrain visible) instead of acting
+        // as an unintended see-through / LOD view.
+        VoxyChunkReloadState.suppressIngestFor(2000);
+        VoxyChunkReloadState.suppressRenderingFor(1000);
+    }
+
     @Inject(method = "allChanged()V", at = @At("RETURN"))
     private void voxy$reloadVoxyRenderer(CallbackInfo ci) {
-        this.voxy$shutdownRenderer();
-        if (this.level != null) {
-            this.voxy$createRenderer();
+        if (this.renderer != null) {
+            this.renderer.chunkBoundRenderer.reset();
+        } else {
+            this.voxy$shutdownRenderer();
+            if (this.level != null) {
+                this.voxy$createRenderer();
+            }
         }
     }
 

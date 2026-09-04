@@ -1,5 +1,6 @@
 package me.cortex.voxy.client.mixin.sodium;
 
+import me.cortex.voxy.client.VoxyChunkReloadState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -36,7 +37,7 @@ public class MixinSodiumWorldRendererVS {
         }
         if (renderLayer == RenderType.solid()) {
             var renderer = ((IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer).voxy$getRenderSystem();
-            if (renderer != null) {
+            if (renderer != null && !VoxyChunkReloadState.isRenderingSuppressed()) {
                 Viewport<?> viewport;
                 if (IrisUtil.irisShaderPackEnabled()) {
                     viewport = renderer.getViewport();

@@ -34,6 +34,7 @@ public class VoxyConfig
     public boolean enabled = true;
     public boolean enableRendering = true;
     public boolean ingestEnabled = true;
+    public int lodDistance = 64;
     public float sectionRenderDistance = 16;
     public int serviceThreads = (int) Math.max(CpuLayout.getCoreCount()/1.5, 1);
     public float subDivisionSize = 64;
@@ -143,6 +144,7 @@ public class VoxyConfig
         this.fogDistancePercent = clamp(this.fogDistancePercent, 5, 200);
         this.biomeBlendRadius = clamp(this.biomeBlendRadius, 0, 7);
         this.requestDistance = clamp(this.requestDistance, 8, 48);
+        this.lodDistance = clamp(this.lodDistance, 2, 64);
         if (!"water".equals(this.biomeBlendScope) && !"water_grass".equals(this.biomeBlendScope)) {
             this.biomeBlendScope = "water";
         }

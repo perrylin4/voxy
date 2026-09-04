@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.mixin.sodium;
 
 import me.cortex.voxy.client.VoxyClient;
+import me.cortex.voxy.client.VoxyChunkReloadState;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.util.IrisUtil;
@@ -56,7 +57,7 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         }
         if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {
             var renderer = ((IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer).voxy$getRenderSystem();
-            if (renderer != null) {
+            if (renderer != null && !VoxyChunkReloadState.isRenderingSuppressed()) {
                 Viewport<?> viewport;
                 if (IrisUtil.irisShaderPackEnabled()) {
                     viewport = renderer.getViewport();
