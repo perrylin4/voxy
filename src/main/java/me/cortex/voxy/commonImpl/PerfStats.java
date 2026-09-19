@@ -2,12 +2,10 @@ package me.cortex.voxy.commonImpl;
 
 import java.util.concurrent.atomic.LongAdder;
 
-//Counters for the fork's own optimizations, so their effect can be seen live (/voxy perf) instead of
-//guessed at. LongAdder because most of these are incremented from many ingest/render threads and read
-//rarely - it beats AtomicLong under that write contention and the read cost (sum) only happens on the
-//command. Purely diagnostic: nothing here feeds behaviour, so it can be read/reset at any time.
 public final class PerfStats {
     private PerfStats() {}
+    public static final LongAdder sectionArrayPoolMiss = new LongAdder();
+    public static final LongAdder sectionArrayPoolOverflow = new LongAdder();
 
     //--- ingest hot path ---
     //Biome id resolution: a hit skipped a ResourceLocation.toString() + registry lookup (64x/section)
@@ -39,9 +37,6 @@ public final class PerfStats {
     //Sections that had to allocate a real array (the denominator for the uniform hit rate)
     public static final LongAdder sectionMaterialized = new LongAdder();
 
-    //Sections ingested with no owning chunk, i.e. handed over by a server-side LOD sender rather than
-    //loaded by this client. The one unambiguous sign that bridge is alive - terrain simply looking
-    //fuller cannot tell a working sender from the client having flown there earlier.
     public static final LongAdder sectionIngestedChunkless = new LongAdder();
     public static final LongAdder sectionIngestedWithChunk = new LongAdder();
     //Materialise calls that found another thread had already done it (contention, but no wasted work)

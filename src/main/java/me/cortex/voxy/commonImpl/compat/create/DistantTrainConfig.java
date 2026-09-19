@@ -1,18 +1,5 @@
 package me.cortex.voxy.commonImpl.compat.create;
 
-//Control point for distant-train pose streaming, read by the server-side CreateTrainSampler. Holds no
-//client-type references, so the sampler can read it on any dist without dragging in client classes.
-//Two independent inputs are combined:
-//
-//  - CLIENT preference  (VoxyConfig.save -> updateClientConfig): how far THIS client wants trains.
-//    On the integrated server (client + server in one JVM) it carries the host's own render distance;
-//    on a dedicated server there is no client in the JVM to write it, so it stays at the defaults.
-//  - SERVER ceiling     (CreateServerConfig -> updateServerConfig): the dedicated-server admin's
-//    uniform ceiling from voxy-server.toml, applied to every player. On a dedicated server this is the
-//    only control; on the integrated server it further caps the host's preference.
-//
-//The sampler uses the tighter of the two (enabled = both, distance = min), so neither side can widen
-//what the other narrowed, and each degrades to "no constraint" (enabled, HARD_MAX) when unset.
 public final class DistantTrainConfig {
     private DistantTrainConfig() {}
 

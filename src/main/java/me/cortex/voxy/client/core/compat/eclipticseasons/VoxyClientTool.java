@@ -3,6 +3,7 @@ package me.cortex.voxy.client.core.compat.eclipticseasons;
 import com.teamtea.eclipticseasons.client.core.ExtraModelManager;
 import com.teamtea.eclipticseasons.client.core.ExtraRendererContext;
 import com.teamtea.eclipticseasons.client.util.ClientCon;
+import com.teamtea.eclipticseasons.client.util.ClientRef;
 import com.teamtea.eclipticseasons.common.core.map.MapChecker;
 import me.cortex.voxy.client.core.compat.eclipticseasons.VoxyTool;
 import java.util.List;
@@ -27,8 +28,16 @@ public class VoxyClientTool {
             return;
         }
         if (state.getRenderShape() != RenderShape.INVISIBLE) {
-            int defaultBlockTypeFlag = MapChecker.getDefaultBlockTypeFlag((BlockState)state);
-            BakedModel model = ExtraModelManager.getSnowyModel((BlockState)state, null, (int)defaultBlockTypeFlag, (int)MapChecker.getSnowOffset((BlockState)state, (int)defaultBlockTypeFlag));
+            int defaultBlockTypeFlag = MapChecker.getDefaultBlockTypeFlag(state);
+            int snowOffset = MapChecker.getSnowOffset(state, defaultBlockTypeFlag);
+            var snowDefinitions = ClientRef.snowClientDef.get(state.getBlock());
+            if (snowDefinitions != null && !snowDefinitions.isEmpty()) {
+                var info = snowDefinitions.getFirst().getInfo();
+                defaultBlockTypeFlag = info.getFlag();
+                snowOffset = info.getOffset();
+            }
+            BakedModel model = ExtraModelManager.getSnowyModel(
+                    state, null, defaultBlockTypeFlag, snowOffset);
             if (model == null) {
                 return;
             }

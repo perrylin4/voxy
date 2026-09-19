@@ -75,7 +75,6 @@ public class ReadonlyCachingLayer extends StorageBackend {
 
     @Override
     public Int2ObjectOpenHashMap<byte[]> getIdMappingsData() {
-        //TODO: replicate this data onto the cache
         return this.onMiss.getIdMappingsData();
     }
 

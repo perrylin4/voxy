@@ -27,7 +27,6 @@ public class SectionSerializationStorage extends SectionStorage {
         if (data != null) {
             if (!SaveLoadSystem3.deserialize(into, data)) {
                 this.backend.deleteSectionData(into.key);
-                //TODO: regenerate the section from children
                 //No fill here: returning -1 makes the tracker force status 1 and set the section to
                 //uniform air itself, so filling an array we are about to discard was dead work (and it
                 //would now needlessly materialise one).
@@ -37,7 +36,6 @@ public class SectionSerializationStorage extends SectionStorage {
                 return 0;
             }
         } else {
-            //TODO: if we need to fetch an lod from a server, send the request here and block until the request is finished
             // the response should be put into the local db so that future data can just use that
             // the server can also send arbitrary updates to the client for arbitrary lods
             return 1;

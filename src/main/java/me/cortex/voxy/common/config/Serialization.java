@@ -84,16 +84,11 @@ public class Serialization {
     public static void init() {
         Map<Class<?>, GsonConfigSerialization<?>> serializers = new HashMap<>();
 
-        //Named rather than class literals, because a literal only loads a class - it does not run its
-        //static initializer, and that is what registers each config type into CONFIG_TYPES. Class.forName
-        //with initialize=true is the only form that populates the map.
+        // Force static initialization so each type registers itself.
         String[] configClassNames = {
-            // Compressor configs (extend CompressorConfig)
             "me.cortex.voxy.common.config.compressors.LZ4Compressor$Config",
-            // LZMACompressor is commented out in source
             "me.cortex.voxy.common.config.compressors.ZSTDCompressor$Config",
 
-            // Storage configs (extend StorageConfig)
             "me.cortex.voxy.common.config.storage.lmdb.LMDBStorageBackend$Config",
             "me.cortex.voxy.common.config.storage.inmemory.MemoryStorageBackend$Config",
             "me.cortex.voxy.common.config.storage.redis.RedisStorageBackend$Config",

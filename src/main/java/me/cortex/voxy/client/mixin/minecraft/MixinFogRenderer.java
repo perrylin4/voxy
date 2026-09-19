@@ -34,11 +34,6 @@ public class MixinFogRenderer {
         var vrs = IGetVoxyRenderSystem.getNullable();
         if (vrs == null) return;
 
-        //Media that restrict vision - blindness, darkness, and being inside a fluid - own the fog and
-        //must keep it: vanilla terrain goes dark from it, and the LOD has to follow or the world beyond
-        //the vanilla render distance stays lit while everything nearer is black. Capture the live values
-        //and leave vanilla's fog alone. It has to run ahead of the short-fog guard below, since a
-        //restricting fog is a short one and would be skipped by it.
         if (fogMode == FogMode.FOG_TERRAIN
                 && (camera.getFluidInCamera() != FogType.NONE
                     || (camera.getEntity() instanceof LivingEntity living
@@ -58,14 +53,6 @@ public class MixinFogRenderer {
             // Do NOT override unique fog, it's always displayed close and meant for restricting vision
             boolean noFogType = camera.getFluidInCamera() == FogType.NONE;
 
-            // Always hide vanilla terrain fog - either replaced by voxy or disabled completely
-            // unless it's special fog, in that case it must be rendered to restrict vision in regular chunks.
-            //
-            //The medium is re-tested here rather than inferred from having taken the branch above:
-            //setupFog is cancellable at HEAD and mods do cancel it, so an earlier return in this method
-            //is not proof the later code is unreachable. Sodium's chunk shaders read this fog state
-            //directly (ChunkShaderFogComponent$Smooth#setup), so clobbering it while vision is
-            //restricted leaves vanilla terrain drawn to the render distance edge with no fog at all.
             if (noFogType && !me.cortex.voxy.client.core.VoxyRenderSystem.restrictingMediumPresent()) {
                 RenderSystem.setShaderFogStart(999999999);
                 RenderSystem.setShaderFogEnd(999999999);

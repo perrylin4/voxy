@@ -11,11 +11,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//Distance cull at the shared entry of every Create-style block-entity renderer. Addons override
-//renderSafe with their own animation passes (bits_n_bobs' flywheel bearing spins in its BER, no
-//Flywheel visual involved), so a cull on the base renderSafe never fires for them - but they all come
-//through this final render(). Kinetic block entities beyond the render distance skip straight to the
-//snapshot copy; everything else is untouched.
 @Mixin(SafeBlockEntityRenderer.class)
 public class MixinSafeBlockEntityRenderer {
     @Inject(method = "render(Lnet/minecraft/world/level/block/entity/BlockEntity;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;II)V",

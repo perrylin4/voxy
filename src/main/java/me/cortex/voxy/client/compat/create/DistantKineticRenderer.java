@@ -22,9 +22,6 @@ import static org.lwjgl.opengl.GL11C.glStencilOp;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 
-//Draws the frozen kinetic moving-part snapshots (see KineticSnapshots) inside the LOD pipeline: one
-//mesh per section, vertex-baked light, stencil tag 3 and the shared depth so LOD terrain occludes them
-//per pixel - the machines keep their shafts and cogs past the render distance, frozen where they were.
 public final class DistantKineticRenderer implements LodPipelineHooks.Renderer {
     public static volatile int lastFrameSectionsDrawn;
 
@@ -76,11 +73,6 @@ public final class DistantKineticRenderer implements LodPipelineHooks.Renderer {
             return;
         }
 
-        //The live path (Flywheel/BER, plus the anti-float cull) owns everything inside the render
-        //distance; the snapshots own the band from there out to the LOD radius.
-        //The cull hides each BE by its own position, but this gate tests the section CENTRE - a BE
-        //past the reach whose section centre is still inside left a band where neither side drew.
-        //Pull the gate in by the section half-diagonal so the snapshot owns that band.
         double reach = Math.max(0, mc.options.getEffectiveRenderDistance() * 16.0 - 14.0);
         double reachSq = reach * reach;
         double maxDist = cfg.createRenderDistance(cfg.distantKineticMaxChunks);

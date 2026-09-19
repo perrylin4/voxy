@@ -7,7 +7,6 @@ import me.cortex.voxy.client.compat.create.DistantMeshBuilder;
 import me.cortex.voxy.client.compat.create.DistantShaders;
 import me.cortex.voxy.client.compat.create.DistantVisibility;
 import me.cortex.voxy.client.config.VoxyConfig;
-import me.cortex.voxy.client.core.rendering.LodBoundaryFade;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.section.SectionStorage;
@@ -85,7 +84,8 @@ public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
 
         drainUpdates(128);
         var camera = mc.gameRenderer.getMainCamera().getPosition();
-        double maxDistance = VoxyConfig.CONFIG.sectionRenderDistance * 32.0 * 16.0;
+        double maxDistance = VoxyConfig.CONFIG.createRenderDistance(VoxyConfig.CONFIG.distantDomumMaxChunks);
+        if (!VoxyConfig.CONFIG.distantDomum) return;
         double maxDistanceSq = maxDistance * maxDistance;
         int cx = ((int) Math.floor(camera.x)) >> 4;
         int cz = ((int) Math.floor(camera.z)) >> 4;
@@ -128,16 +128,15 @@ public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
 
     @Override
     public void render(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline, Viewport<?> viewport, int depthFunc) {
-        if (this.sections.isEmpty() || !VoxyConfig.CONFIG.isRenderingEnabled()) return;
+        if (this.sections.isEmpty() || !VoxyConfig.CONFIG.isRenderingEnabled()
+                || !VoxyConfig.CONFIG.distantDomum) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.level != this.level) return;
         pipeline.setupAndBindOpaque(viewport);
 
         double vanillaReach = Math.max(0.0, mc.options.getEffectiveRenderDistance() * 16.0 - 14.0);
-        var boundary = LodBoundaryFade.getDistances();
-        double handoff = boundary.enabled() ? boundary.fadeStart() : vanillaReach;
-        double handoffSq = handoff * handoff;
-        double maxDistance = VoxyConfig.CONFIG.sectionRenderDistance * 32.0 * 16.0;
+        double handoffSq = vanillaReach * vanillaReach;
+        double maxDistance = VoxyConfig.CONFIG.createRenderDistance(VoxyConfig.CONFIG.distantDomumMaxChunks);
         double maxDistanceSq = maxDistance * maxDistance;
         boolean bound = false;
         var transform = new Matrix4f();
@@ -152,7 +151,7 @@ public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
                 double dx = ox + 8.0 - viewport.cameraX;
                 double dy = oy + 8.0 - viewport.cameraY;
                 double dz = oz + 8.0 - viewport.cameraZ;
-                double nearSq = boundary.enabled() ? dx * dx + dy * dy + dz * dz : dx * dx + dz * dz;
+                double nearSq = dx * dx + dz * dz;
                 if (nearSq < handoffSq || dx * dx + dy * dy + dz * dz > maxDistanceSq) continue;
                 if (!DistantVisibility.isBoxVisible(viewport, ox - 4, oy - 4, oz - 4,
                         ox + 20, oy + 20, oz + 20)) continue;
@@ -205,14 +204,10 @@ public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
 
         this.sections.put(key, new Entry(pairs));
 
-        // A section normally reaches this method at exactly the vanilla/LOD handoff. Waiting for
-        // the coarse camera rescan leaves a visible gap while walking away; approaching works only
-        // because that mesh was already cached. Queue the newly persisted section immediately,
-        // while keeping actual GPU uploads limited by MAX_BAKES_PER_TICK.
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == this.level) {
             var camera = mc.gameRenderer.getMainCamera().getPosition();
-            double maxDistance = VoxyConfig.CONFIG.sectionRenderDistance * 32.0 * 16.0;
+            double maxDistance = VoxyConfig.CONFIG.createRenderDistance(VoxyConfig.CONFIG.distantDomumMaxChunks);
             if (distanceSq(key, camera.x, camera.y, camera.z) <= maxDistance * maxDistance
                     && this.queued.add(key)) {
                 if (urgent) this.bakeQueue.addFirst(key);
@@ -237,6 +232,12 @@ public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
         try {
             var blockRenderer = Minecraft.getInstance().getBlockRenderer();
             var colors = Minecraft.getInstance().getBlockColors();
+            boolean[] fullBlocks = new boolean[4096];
+            for (int i = 0; i < blocks.length; i += 2) {
+                int local = blocks[i];
+                fullBlocks[local] = me.cortex.voxy.client.compat.create.DistantFaceCulling.isFullBlock(
+                        mapper.getBlockStateFromBlockId(blocks[i + 1]));
+            }
             for (int i = 0; i < blocks.length; i += 2) {
                 int local = blocks[i], blockId = blocks[i + 1];
                 var plan = DomumOrnamentumCompat.getBakePlan(mapper, blockId);
@@ -252,7 +253,10 @@ public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
                 }
                 int light = DistantLightSampler.sample(level, wx, wy, wz);
                 builder.blockModel(state, model, x, y, z,
-                        DistantLightSampler.sky(light), DistantLightSampler.block(light), null, tint, plan.modelData());
+                        DistantLightSampler.sky(light), DistantLightSampler.block(light),
+                        direction -> me.cortex.voxy.client.compat.create.DistantFaceCulling
+                                .hidesSectionFace(fullBlocks, local, direction),
+                        tint, plan.modelData());
             }
             return builder.build();
         } catch (Throwable t) {

@@ -26,7 +26,7 @@ public class ModelBakerySubsystem {
         this.mapper = mapper;
         try {
             this.factory = new ModelFactory(mapper, this.storage);
-            this.processingThread = new Thread(()->{//TODO replace this with something good/integrate it into the async processor so that we just have less threads overall
+            this.processingThread = new Thread(()->{
                 while (this.isRunning) {
                     while (this.factory.processAllThings());
                     if (Thread.interrupted()) {
@@ -78,9 +78,10 @@ public class ModelBakerySubsystem {
     //This is on this side only and done like this as only worker threads call this code
     private final ReentrantLock seenIdsLock = new ReentrantLock();
     private final ReentrantLock enqueueLock = new ReentrantLock();
-    private final IntOpenHashSet seenIds = new IntOpenHashSet(6000);//TODO: move to a lock free concurrent hashmap
+    private final IntOpenHashSet seenIds = new IntOpenHashSet(6000);
     public void requestBlockBake(int blockId) {
-        if (this.mapper.getBlockStateCount() <= blockId) {
+        if (this.mapper.getBlockStateCount() <= blockId
+                && !me.cortex.voxy.common.world.other.SeasonalIdSpace.resolvesToState(this.mapper, blockId)) {
             Logger.error("Error, got bakeing request for out of range state id. StateId: " + blockId + " max id: " + this.mapper.getBlockStateCount(), new Exception());
             return;
         }

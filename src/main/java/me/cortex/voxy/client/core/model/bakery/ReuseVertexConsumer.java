@@ -184,9 +184,6 @@ public final class ReuseVertexConsumer implements VertexConsumer {
         if (forceSolid) {
             return false;
         }
-        // Translucent cube models such as glass still use normal face culling. Treating them like
-        // cutout cards makes the offline projection blend the front, back and overlapping edge
-        // faces together, which changes the texture and quickly drives stained glass to opaque.
         if (layer == RenderType.translucent()) {
             return false;
         }
@@ -196,14 +193,6 @@ public final class ReuseVertexConsumer implements VertexConsumer {
         return voxy$quadSpriteHasTransparency(quad);
     }
 
-    /*
-     * Some modded plant/cross models are registered as SOLID even though their
-     * atlas sprite is really alpha-cutout.  Vanilla grass usually reports the
-     * correct cutout layer, but those modded ground plants would bake their
-     * transparent texels into Voxy's offline impostor texture and become dark
-     * rectangular cards.  Detect the real sprite transparency once per sprite;
-     * this keeps the runtime world conversion path unchanged and lightweight.
-     */
     private static boolean voxy$quadSpriteHasTransparency(BakedQuad quad) {
         try {
             Object sprite = voxy$invokeNoArg(quad, "getSprite");

@@ -10,10 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-//Gates the sable contraption-compat common mixins (and the vanilla ServerLevel ticket hook that only
-//serves sable) on sable being installed. They are @Pseudo / reference sable types, so registering them
-//unconditionally in a config with no plugin makes voxy hard-depend on sable and crash without it.
-//Adding them dynamically here means they are never even loaded when sable is absent.
 public class CommonVoxyMixinPlugin implements IMixinConfigPlugin {
     private boolean sableInstalled;
     private boolean createInstalled;

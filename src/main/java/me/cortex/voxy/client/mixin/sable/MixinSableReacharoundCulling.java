@@ -29,10 +29,6 @@ public abstract class MixinSableReacharoundCulling {
         return SableReacharoundCulling.filter(subLevels, cameraX, cameraZ);
     }
 
-    //Block entities are the third consumer of the same list. Voxy is what widened the render distance
-    //these sub-levels are gathered at, so leaving one consumer unbounded means voxy hands sable more
-    //work than sable would ever have asked for - and this one renders every section of every sub-level
-    //it is given.
     @ModifyVariable(method = "renderBlockEntities", at = @At("HEAD"), argsOnly = true, ordinal = 0)
     private Iterable<ClientSubLevel> voxy$cullBlockEntitySubLevels(
             Iterable<ClientSubLevel> subLevels,

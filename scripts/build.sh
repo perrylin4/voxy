@@ -5,16 +5,14 @@ edition="${1:-}"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 case "$edition" in
-  integrations-1.21.1)
+  neoforge-1.21.1)
     project="$repo"; java_version=21 ;;
-  client-1.21.1)
-    project="$repo/editions/neoforge-1.21.1-client"; java_version=21 ;;
   client-1.20.1)
     project="$repo/editions/forge-1.20.1-client"; java_version=17 ;;
   client-26.1.2)
     project="$repo/editions/neoforge-26.1.2-client"; java_version=25 ;;
   *)
-    echo 'Usage: scripts/build.sh {integrations-1.21.1|client-1.21.1|client-1.20.1|client-26.1.2}' >&2
+    echo 'Usage: scripts/build.sh {neoforge-1.21.1|client-1.20.1|client-26.1.2}' >&2
     exit 2 ;;
 esac
 

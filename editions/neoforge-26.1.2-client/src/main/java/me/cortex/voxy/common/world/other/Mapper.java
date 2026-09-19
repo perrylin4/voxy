@@ -39,6 +39,9 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.lwjgl.system.MemoryUtil;
 
 public class Mapper {
+   private static final long SURFACE_CARRIER_BLOCK_MASK = (1L << 20) - 1L;
+   private static final long SURFACE_CARRIER_FLAG = 1L << 20;
+   private static final long SURFACE_CARRIER_MASK = SURFACE_CARRIER_FLAG | SURFACE_CARRIER_BLOCK_MASK;
    private static final int BLOCK_STATE_TYPE = 1;
    private static final int BIOME_TYPE = 2;
    private final IMappingStorage storage;
@@ -87,6 +90,31 @@ public class Mapper {
 
    public static long airWithLight(int light) {
       return Integer.toUnsignedLong(light & 0xFF) << 56;
+   }
+
+   public static long makeSurfaceCarrier(long voxel) {
+      int block = getBlockId(voxel);
+      return voxel & ~((((1L << 20) - 1L) << 27) | SURFACE_CARRIER_MASK)
+         | SURFACE_CARRIER_FLAG | Integer.toUnsignedLong(block);
+   }
+
+   public static boolean isSurfaceCarrier(long voxel) {
+      return (voxel & SURFACE_CARRIER_FLAG) != 0L;
+   }
+
+   public static long clearSurfaceCarrier(long voxel) {
+      return voxel & ~SURFACE_CARRIER_MASK;
+   }
+
+   public static long restoreSurfaceCarrier(long voxel) {
+      return withBlockBiome(voxel, (int)(voxel & SURFACE_CARRIER_BLOCK_MASK), getBiomeId(voxel));
+   }
+
+   public static long applySurfaceCarrier(long below, long carrier) {
+      return withLight(
+         withBlockBiome(below, (int)(carrier & SURFACE_CARRIER_BLOCK_MASK), getBiomeId(carrier)),
+         getLightId(carrier)
+      );
    }
 
    public void setStateCallback(Consumer<Mapper.StateEntry> stateCallback) {

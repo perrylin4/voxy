@@ -13,12 +13,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-//Create's kinetic BERs early-return while the Flywheel backend runs (supportsVisualization gate at the
-//head of every renderSafe), which starves the generic snapshot capture: the machine-specific moving
-//parts (press heads, fan blades, flywheel-bearing gears...) only stream in the full backend-off pass.
-//During a capture the gate answers false through this thread-local, scoped strictly to the capture
-//call stack. Target is the IMPL class's plain static method - the api-side interface static delegates
-//here through FlwApiLink, and injecting the interface static proved unreliable.
 @Mixin(value = VisualizationManagerImpl.class, remap = false)
 public class MixinVisualizationManagerImpl {
     @Inject(method = "supportsVisualization", at = @At("HEAD"), cancellable = true)
@@ -28,14 +22,6 @@ public class MixinVisualizationManagerImpl {
         }
     }
 
-    //A ship's kinetics render as live Flywheel visuals in the ship's embedding, but this pass tests only
-    //against the vanilla depth buffer - under shader packs that keep LOD depth out of it, distant ships'
-    //machine parts shine straight through LOD terrain (the hull doesn't: sable's section layers render
-    //inside VoxySableDepthShim, which is exactly the combined vanilla+LOD depth this wrap adds here).
-    //World-placed visuals sit well inside the LOD start so the extra depth test never rejects them, and
-    //the shim writes back only depth this pass actually changed, keeping LOD depth out of the shader
-    //pack's depthtex. Bounded to the ships and skipped when none of them can meet LOD at all: the blits
-    //behind it are fullscreen otherwise, and this path runs on every frame a ship exists.
     @org.spongepowered.asm.mixin.Unique
     private boolean voxy$depthWrapped;
 

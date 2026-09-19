@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.compat.create;
 
 import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.Direction;
 import net.minecraft.util.RandomSource;
@@ -10,11 +11,9 @@ import org.joml.Vector4f;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
+import java.util.function.ToIntFunction;
 import java.util.function.Predicate;
 
-//CPU-side mesh assembly straight from BakedQuad assets into the distant vertex format. Nothing in
-//this chain touches vanilla BufferBuilders, RenderTypes or anything a shader mod can mixin, which
-//is the whole point: geometry bakes identically regardless of the shader environment.
 public final class DistantMeshBuilder {
     private ByteBuffer buffer;
     private int vertexCount;
@@ -32,10 +31,17 @@ public final class DistantMeshBuilder {
     }
 
     public void rawVertex(float x, float y, float z, float u, float v, int skyLight, int blockLight, float shade, int face, int tintRgb) {
+        this.rawVertex(x, y, z, u, v, skyLight, blockLight, shade, face, tintRgb, 255);
+    }
+
+    public void rawVertex(float x, float y, float z, float u, float v, int skyLight, int blockLight,
+                          float shade, int face, int tintRgb, int alpha) {
+        this.rawVertex(x, y, z, u, v, skyLight, blockLight, shade, face, tintRgb, alpha, 0);
+    }
+
+    public void rawVertex(float x, float y, float z, float u, float v, int skyLight, int blockLight,
+                          float shade, int face, int tintRgb, int alpha, int customId) {
         this.ensure(DistantMesh.STRIDE);
-        //Six comparisons against a mesh baked once and then drawn every frame it is in range. Note quad()
-        //writes its vertices straight to the buffer rather than coming through here, so it accumulates
-        //separately - miss that and the bounds cover only hand-built geometry.
         if (x < this.minX) this.minX = x;
         if (y < this.minY) this.minY = y;
         if (z < this.minZ) this.minZ = z;
@@ -47,7 +53,9 @@ public final class DistantMeshBuilder {
         this.buffer.put((byte) (blockLight * 16 + 8)).put((byte) (skyLight * 16 + 8));
         this.buffer.put((byte) (int) (Math.max(0, Math.min(1, shade)) * 255.0f));
         this.buffer.put((byte) face);
-        this.buffer.put((byte) (tintRgb >> 16)).put((byte) (tintRgb >> 8)).put((byte) tintRgb).put((byte) 0xFF);
+        this.buffer.put((byte) (tintRgb >> 16)).put((byte) (tintRgb >> 8)).put((byte) tintRgb)
+                .put((byte) Math.clamp(alpha, 0, 255));
+        this.buffer.putInt(customId);
         this.vertexCount++;
     }
 
@@ -70,12 +78,6 @@ public final class DistantMeshBuilder {
     public void blockModel(BlockState state, BakedModel model, float ox, float oy, float oz,
                            int skyLight, int blockLight, Predicate<Direction> faceHidden, int tintRgb,
                            net.neoforged.neoforge.client.model.data.ModelData modelData) {
-        //Query per declared chunk layer, as the chunk mesher does. A model that hides its json from
-        //the chunk layers (Create's rotating shafts and cogs - the BER spins that json, the chunk
-        //never draws it) contributes nothing here either; the null-renderType query returned those
-        //quads and baked them at kinetic angle zero, a copy that can only disagree with the frozen
-        //and live angles around it. A model that ignores the layer argument declares one layer and is
-        //queried once, so nothing doubles.
         this.random.setSeed(42);
         for (var layer : model.getRenderTypes(state, this.random, modelData)) {
             for (Direction direction : Direction.values()) {
@@ -91,6 +93,37 @@ public final class DistantMeshBuilder {
             for (BakedQuad quad : model.getQuads(state, null, this.random, modelData, layer)) {
                 this.quad(null, quad, ox, oy, oz, skyLight, blockLight, quad.isTinted() ? tintRgb : 0xFFFFFF);
             }
+        }
+    }
+
+    public void blockModelLayer(BlockState state, BakedModel model, float ox, float oy, float oz,
+                                 int skyLight, int blockLight, RenderType layer,
+                                 ToIntFunction<BakedQuad> tintResolver,
+                                 net.neoforged.neoforge.client.model.data.ModelData modelData) {
+        this.blockModelLayer(state, model, ox, oy, oz, skyLight, blockLight, layer,
+                tintResolver, modelData, null);
+    }
+
+    public void blockModelLayer(BlockState state, BakedModel model, float ox, float oy, float oz,
+                                int skyLight, int blockLight, RenderType layer,
+                                ToIntFunction<BakedQuad> tintResolver,
+                                net.neoforged.neoforge.client.model.data.ModelData modelData,
+                                Predicate<Direction> faceHidden) {
+        this.random.setSeed(42);
+        for (Direction direction : Direction.values()) {
+            if (faceHidden != null && faceHidden.test(direction)) {
+                continue;
+            }
+            this.random.setSeed(42);
+            for (BakedQuad quad : model.getQuads(state, direction, this.random, modelData, layer)) {
+                int tint = quad.isTinted() ? tintResolver.applyAsInt(quad) : 0xFFFFFF;
+                this.quad(null, quad, ox, oy, oz, skyLight, blockLight, tint);
+            }
+        }
+        this.random.setSeed(42);
+        for (BakedQuad quad : model.getQuads(state, null, this.random, modelData, layer)) {
+            int tint = quad.isTinted() ? tintResolver.applyAsInt(quad) : 0xFFFFFF;
+            this.quad(null, quad, ox, oy, oz, skyLight, blockLight, tint);
         }
     }
 
@@ -117,9 +150,6 @@ public final class DistantMeshBuilder {
         int[] vertices = quad.getVertices();
         byte lightU = (byte) (blockLight * 16 + 8);
         byte lightV = (byte) (skyLight * 16 + 8);
-        //Face and shade must follow the transform: the quad's own direction is model-local, and a
-        //rotated segment (bezier track) whose top face still claims model-north gets lit as a wall
-        //by shader packs (they rebuild the surface normal from the face) - angle-dependent glare.
         Direction lit = quad.getDirection();
         if (transform != null) {
             var n = this.normalScratch.set(lit.getStepX(), lit.getStepY(), lit.getStepZ());
@@ -153,6 +183,7 @@ public final class DistantMeshBuilder {
             this.buffer.putFloat(Float.intBitsToFloat(vertices[base + 5]));
             this.buffer.put(lightU).put(lightV).put(shade).put(face);
             this.buffer.put(tr).put(tg).put(tb).put((byte) 0xFF);
+            this.buffer.putInt(0);
         }
         this.vertexCount += 4;
     }
@@ -198,10 +229,6 @@ public final class DistantMeshBuilder {
         return this.vertexCount < 4;
     }
 
-    //Vertex data ready for the GPU but not on it. Owns the native buffer that the builder gave up, so it
-    //has to be either uploaded or freed - letting the reference go leaks. Exists so assembling a mesh
-    //(pure arithmetic over block models) can happen away from the render thread while the upload, which
-    //is the only part that touches GL, stays on it.
     public static final class CpuMesh {
         private ByteBuffer buffer;
         public final int quadCount;

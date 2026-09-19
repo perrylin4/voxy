@@ -169,8 +169,6 @@ public class ServiceManager {
     }
 
     void remJobs(int remaining) {
-        //TODO:FIXME: THIS NEEDS TO BUBBLE UP TO THE jobRelease thing
-        // AFAK! if this is zero inside the runAJob loop, it must return
 
         if (this.totalJobs.addAndGet(-remaining)<0) {
             throw new IllegalStateException("total jobs <0");

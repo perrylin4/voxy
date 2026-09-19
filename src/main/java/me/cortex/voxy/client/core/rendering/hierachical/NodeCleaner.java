@@ -17,16 +17,9 @@ import static org.lwjgl.opengl.GL30C.glBindBufferRange;
 import static org.lwjgl.opengl.GL42C.glMemoryBarrier;
 import static org.lwjgl.opengl.GL43C.*;
 
-//Uses compute shaders to compute the last 256 rendered section (64x64 workgroup size maybe)
-// done via warp level sort, then workgroup sort (shared memory), (/w sorting network)
-// then use bubble sort (/w fast path going to middle or 2 subdivisions deep) the bubble it up
-// can do incremental sorting pass aswell, so only scan and sort a rolling sector of sections
-// (over a few frames to not cause lag, maybe)
 
 
-//TODO : USE THIS IN HierarchicalOcclusionTraverser instead of other shit
 public class NodeCleaner {
-    //TODO: use batch_visibility_set to clear visibility data when nodes are removed!! (TODO: nodeManager will need to forward info to this)
 
 
     private static final int SORTING_WORKER_SIZE = 64;
@@ -79,42 +72,19 @@ public class NodeCleaner {
                 .ssbo("VISIBILITY_BUFFER_BINDING", this.visibilityBuffer)
                 .ssbo("OUTPUT_BUFFER_BINDING", this.outputBuffer);
 
-        /*
-        this.nodeManager.setClear(new NodeManager.ICleaner() {
-            @Override
-            public void alloc(int id) {
-                NodeCleaner.this.allocIds.add(id);
-                NodeCleaner.this.freeIds.remove(id);
-            }
-
-            @Override
-            public void move(int from, int to) {
-                NodeCleaner.this.allocIds.remove(to);
-                glCopyNamedBufferSubData(NodeCleaner.this.visibilityBuffer.id, NodeCleaner.this.visibilityBuffer.id, 4L*from, 4L*to, 4);
-            }
-
-            @Override
-            public void free(int id) {
-                NodeCleaner.this.freeIds.add(id);
-                NodeCleaner.this.allocIds.remove(id);
-            }
-        });
-         */
     }
 
 
     public void tick(GlBuffer nodeDataBuffer) {
         this.visibilityId++;
         if (this.shouldCleanGeometry()) {
-            this.outputBuffer.fill(this.nodeManager.maxNodeCount - 2);//TODO: maybe dont set to zero??
+            this.outputBuffer.fill(this.nodeManager.maxNodeCount - 2);
 
             this.sorter.bind();
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, nodeDataBuffer.id);
 
-            //TODO: choose whether this is in nodeSpace or section/geometryId space
             //
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-            //This should (IN THEORY naturally align its self to the pow2 max boarder, if not... well undefined behavior is ok right?)
             glDispatchCompute((this.nodeManager.getCurrentMaxNodeId() + (SORTING_WORKER_SIZE*WORK_PER_THREAD) - 1) / (SORTING_WORKER_SIZE*WORK_PER_THREAD), 1, 1);
 
             this.resultTransformer.bind();
@@ -173,11 +143,6 @@ public class NodeCleaner {
         for(int i =0;i < OUTPUT_COUNT; i++) {
             System.out.println(outData[i]);
         }
-        /*
-        System.out.println("---------------\n");
-        for(int i =0;i < OUTPUT_COUNT; i++) {
-            System.out.println(data[i*2+OUTPUT_COUNT]+", "+data[i*2+OUTPUT_COUNT+1]);
-        }*/
         int[] visData = new int[(int) (this.visibilityBuffer.size()/4)];
         ARBDirectStateAccess.glGetNamedBufferSubData(this.visibilityBuffer.id, 0, visData);
         int a = 0;

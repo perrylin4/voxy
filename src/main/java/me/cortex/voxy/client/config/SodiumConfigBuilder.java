@@ -117,6 +117,11 @@ public class SodiumConfigBuilder {
             return this.setEnabler(s->s.readBooleanOption(id), enabler);
         }
 
+        public TYPE setEnablerInherit(String enabler) {
+            var id = ResourceLocation.parse(enabler);
+            return this.setEnablerInherit(s->s.readBooleanOption(id), enabler);
+        }
+
         public TYPE setEnablerAND(String... enablers) {
             var enablersId = mapIds(enablers);
             return this.setEnabler0(new Enabler(s->{
@@ -193,6 +198,13 @@ public class SodiumConfigBuilder {
         protected Supplier<TYPE> getter;
         protected Consumer<TYPE> setter;
         protected OptionImpact impact;
+        private TYPE defaultValue;
+        private boolean explicitDefault;
+        public OPTION setDefault(TYPE value) {
+            this.defaultValue = value;
+            this.explicitDefault = true;
+            return (OPTION) this;
+        }
         public Option(String id, Component name, Component tooltip, Supplier<TYPE> getter, Consumer<TYPE> setter) {
             this.id = id;
             this.name = name;
@@ -269,7 +281,7 @@ public class SodiumConfigBuilder {
 
             option.setStorageHandler(ctx.saveHandler);
 
-            option.setDefaultValue(this.getter.get());
+            option.setDefaultValue(this.explicitDefault ? this.defaultValue : this.getter.get());
 
             if (this.tooltipSupplier != null) {
                 option.setTooltip(this.tooltipSupplier);

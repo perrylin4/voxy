@@ -38,9 +38,6 @@ import static org.lwjgl.opengl.GL11C.glStencilFunc;
 import static org.lwjgl.opengl.GL11C.glStencilOp;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 
-//Beacon beams out where vanilla's block entity renderer has long since stopped. Only the solid inner
-//core: vanilla draws that with no transparency and a depth write, so it belongs in the opaque pass and
-//needs no blending stage of its own. The outer glow is translucent and is not drawn here.
 public final class DistantBeaconRenderer implements LodPipelineHooks.Renderer {
     //Vanilla's BeaconRenderer stops here, and it measures horizontally - getViewDistance is squared
     //against dx/dz only, so a beacon directly overhead is still drawn
@@ -62,10 +59,6 @@ public final class DistantBeaconRenderer implements LodPipelineHooks.Renderer {
 
     private static volatile DistantBeaconRenderer active;
 
-    //Beacon pos -> its current verdict. A beam is re-solved only when its column's voxels changed,
-    //its index entry changed, or it crossed the LOD range - never on a timer. EMPTY is a cached
-    //verdict too: a beacon under a roof is the ordinary case, and re-proving it dark on a timer is
-    //the bulk of the work a change-driven solve avoids.
     private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<BeaconState> states =
             new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
     private static final class BeaconState {
@@ -164,10 +157,6 @@ public final class DistantBeaconRenderer implements LodPipelineHooks.Renderer {
         try {
             var transform = new Matrix4f();
             int drawn = 0;
-            //Handover decided per frame rather than per rebuild. Deciding it while building meant a beam
-            //that vanilla had just stopped drawing did not exist on our side until the next rebuild, so
-            //crossing the boundary outward left a gap for up to the rebuild interval. Everything in LOD
-            //range is built; this is the only thing that decides who draws it.
             double vanillaRange = Math.min(VANILLA_BEAM_RANGE,
                     Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0);
             double vanillaRangeSq = vanillaRange * vanillaRange;
@@ -204,9 +193,6 @@ public final class DistantBeaconRenderer implements LodPipelineHooks.Renderer {
         }
     }
 
-    //Solving walks the voxel store and baking uploads buffers, so neither may happen per frame or on a
-    //timer: a beam is a function of its column's voxels and its index entry, and the tracker watches
-    //both. What arrives here is only what actually changed, a budgeted few per frame.
     private void processChanges(me.cortex.voxy.common.world.WorldEngine engine, Viewport<?> viewport, Minecraft mc) {
         this.drainDirty.clear();
         this.drainRemoved.clear();

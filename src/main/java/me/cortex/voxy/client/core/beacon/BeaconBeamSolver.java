@@ -10,12 +10,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import java.util.ArrayList;
 import java.util.List;
 
-//Works out what a beacon's beam looks like from the voxel store rather than from a BlockEntity, so a
-//beacon thousands of blocks away - whose chunk is not loaded and never will be - still has a beam.
-//
-//The store is the same data the LOD terrain was built from, which is the point: the beam cannot
-//disagree with the world drawn around it, and it needs no invalidation when the glass above one
-//changes. Whatever the last ingest of those sections saw is what both of them show.
 public final class BeaconBeamSolver {
     //Vanilla stops at the build limit; the beam is drawn far past it but the scan has to end somewhere
     static final int MAX_SCAN_HEIGHT = 1024;
@@ -25,9 +19,6 @@ public final class BeaconBeamSolver {
     //One run of constant colour. Heights are absolute world Y.
     public record Segment(int colorRgb, int yBottom, int yTop) {}
 
-    //lookupFailed marks a beam solved against a mapper that did not know one of its ids yet - the
-    //ingest that wrote the voxel races the id registration. Such a verdict is provisional: caching it
-    //as final would freeze a wrong answer until the next voxel change, so the caller retries instead.
     public record Result(List<Segment> segments, boolean lookupFailed, boolean cacheMissed) {
         static final Result EMPTY = new Result(List.of(), false, false);
         static final Result RETRY = new Result(List.of(), true, false);
@@ -35,10 +26,6 @@ public final class BeaconBeamSolver {
     }
 
     public static Result solve(WorldEngine engine, int bx, int by, int bz, int maxBuildY) {
-        //A beacon with no base emits nothing. The gate is in BeaconBlockEntity.getBeamSections, which
-        //returns an empty list while levels == 0 - the segments are still computed and stored, they are
-        //just never handed out, so neither the vanilla renderer nor Quark's replacement draws them.
-        //tick() alone reads as though there were no such gate.
         int top = by + MAX_SCAN_HEIGHT;
         int walkTop = Math.min(top, maxBuildY);
         boolean[] lookupFailed = new boolean[1];
@@ -56,11 +43,6 @@ public final class BeaconBeamSolver {
         boolean anyColorSeen = false;
 
         var mapper = engine.getMapper();
-        //The walk stops at the build height: no block can exist above it, so nothing up there can stop
-        //or tint the beam - and while an above-world acquire never touches the backend, it does mint a
-        //uniform-air section that lands in the shared section LRU on release. Twenty-odd of those per
-        //beacon per rebuild was enough to cycle the whole LRU and evict live terrain. The last segment
-        //still runs to the visual top, exactly as vanilla's does.
 
         //One acquire per section rather than per block: the column walks 16 blocks of a section before
         //it needs the next one, and acquire/release is the expensive part
@@ -86,10 +68,6 @@ public final class BeaconBeamSolver {
                             lookupFailed[0] = true;
                         }
                         if (state != null && isRedirector(state)) {
-                            //Quark's Beacon Redirection turns the beam at a corundum cluster, so it stops
-                            //being a vertical column and this solver cannot describe it. Drawing the
-                            //straight beam anyway would put a beam through terrain the real one turns
-                            //away from - worse than drawing none until redirection is implemented.
                             return Result.EMPTY;
                         }
                         Integer tint = state == null ? null : tintOf(state);
@@ -171,9 +149,6 @@ public final class BeaconBeamSolver {
         return null;
     }
 
-    //What Quark turns a beam on: corundum clusters when its Corundum module is on, amethyst otherwise.
-    //Matched by registry name so this needs no compile-time dependency on Quark, and costs nothing in a
-    //game without it - the amethyst check answers first for every block that is not a cluster.
     private static boolean isRedirector(BlockState state) {
         if (state.is(net.minecraft.world.level.block.Blocks.AMETHYST_CLUSTER)) {
             return true;

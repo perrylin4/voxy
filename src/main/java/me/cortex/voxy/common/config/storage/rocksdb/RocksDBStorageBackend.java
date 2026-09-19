@@ -37,31 +37,8 @@ public class RocksDBStorageBackend extends StorageBackend {
     private final List<AbstractImmutableNativeReference> closeList = new ArrayList<>();
 
     public RocksDBStorageBackend(String path) {
-        /*
-        var lockPath = new File(path).toPath().resolve("LOCK");
-        if (Files.exists(lockPath)) {
-            System.err.println("WARNING, deleting rocksdb LOCK file");
-            int attempts = 10;
-            while (attempts-- != 0) {
-                try {
-                    Files.delete(lockPath);
-                    break;
-                } catch (IOException e) {
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException ex) {
-                        throw new RuntimeException(ex);
-                    }
-                }
-            }
-            if (Files.exists(lockPath)) {
-                throw new RuntimeException("Unable to delete rocksdb lock file");
-            }
-        }
-         */
         RocksDB.loadLibrary();
 
-        //TODO: FIXME: DONT USE THE SAME options PER COLUMN FAMILY
         final ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()
                 .setCompressionType(CompressionType.ZSTD_COMPRESSION)
                 .optimizeForSmallDb();
@@ -83,10 +60,6 @@ public class RocksDBStorageBackend extends StorageBackend {
                 .setFilterPolicy(filter)
         );
 
-        //Every column family present on disk has to be named at open time or RocksDB refuses the whole
-        //database with "Column families not opened: <name>" - so a store written by a build that knows
-        //one more family than this one would be unopenable rather than merely missing a feature. Ask the
-        //store what it holds and open all of it; the ones we have no use for cost an unread handle.
         final List<ColumnFamilyDescriptor> cfDescriptors = new ArrayList<>();
         cfDescriptors.add(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts));
         cfDescriptors.add(new ColumnFamilyDescriptor(WORLD_SECTIONS_CF.getBytes(), cfWorldSecOpts));
@@ -113,12 +86,6 @@ public class RocksDBStorageBackend extends StorageBackend {
 
             this.sectionReadOps = new ReadOptions();
             this.sectionWriteOps = new WriteOptions();
-            //LOD sections are an explicitly regenerable cache (loadSection returns air / deletes corrupt
-            //entries, and re-ingesting chunks rebuilds everything), so the WAL - which roughly doubles
-            //bytes written per section save - buys durability we don't need. Skip it for section writes
-            //and instead flush the section memtable to SST on a clean shutdown (see flush()). An unclean
-            //crash loses only sections written since the last memtable flush, and those regenerate. The
-            //id-mapping CF still uses the default WAL-on write path (small, and load-bearing).
             this.sectionWriteOps.setDisableWAL(true);
 
             this.closeList.add(options);
@@ -274,7 +241,6 @@ public class RocksDBStorageBackend extends StorageBackend {
             try (var iter = this.db.newIterator(this.worldSections, scanOps)) {
                 ByteBuffer keyBuff = stack.calloc(8);
                 long keyBuffPtr = MemoryUtil.memAddress(keyBuff);
-                //TODO: this can be optimized if needed by useing a prefix-seek https://github.com/facebook/rocksdb/wiki/Prefix-Seek
 
                 if (level != -1) {//-1 means iterate all
                     var seekBuff = stack.calloc(8);
@@ -422,9 +388,6 @@ public class RocksDBStorageBackend extends StorageBackend {
     public void flush() {
         try {
             this.db.flushWal(true);
-            //Section writes skip the WAL (see ctor), so their data lives only in the memtable until a
-            //flush - persist it to SST here. flush() is only called on world close / force-resave, never
-            //per section, so the memtable flush cost is a shutdown-time one-off, not a hot-path stall.
             try (var flushOpts = new FlushOptions().setWaitForFlush(true)) {
                 this.db.flush(flushOpts, this.worldSections);
             }
@@ -436,7 +399,6 @@ public class RocksDBStorageBackend extends StorageBackend {
     @Override
     public void close() {
         this.flush();
-        //this.db.cancelAllBackgroundWork(true);//Rocksdb does this automatically (afak)
         this.closeList.forEach(AbstractImmutableNativeReference::close);
         try {
             this.db.closeE();
@@ -485,7 +447,9 @@ public class RocksDBStorageBackend extends StorageBackend {
         if (true) {
             return key;
         }
-        if (WorldEngine.POS_FORMAT_VERSION != 1) throw new IllegalStateException("TODO: UPDATE THIS");
+        if (WorldEngine.POS_FORMAT_VERSION != 1) {
+            throw new IllegalStateException("Unsupported world position format");
+        }
         return  (key&(0xFL<<60)) |
                 Long.expand((key>>> 4)&((1L<<24)-1), 0b01010101010101010101010101010101_001001001001001001001001L) |
                 Long.expand((key>>>52)&0xFF,         0b00000000000000000000000000000000_100100100100100100100100L) |

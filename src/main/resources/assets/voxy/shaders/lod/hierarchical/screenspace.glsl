@@ -1,22 +1,11 @@
 
-//All the screenspace computuation code, hiz culling + size/screenspace AABB size computation
-// to determin whether child node should be visited
-// it controls the actions of the traversal logic
-//NOTEEE!!! SO can do a few things, technically since atm its split not useing persistent threads
-// can use mesh shaders to do rasterized occlution directly with a meshdrawindirect, one per layer
-//Persistent threads might still be viable/usable since the inital lods supplied to the culler are mixed level
-// (basiclly the minimum guarenteed value, like dont supply a top level lod right in front of the camera, since that is guarenteed not to, never be that level)
-// do this based on camera distance computation
 
-//changing the base level/root of the graph for some nodes can be really tricky and incorrect so might not be worth it but it should help
-// substantually for performance (for both persistent threads and incremental)
 
 
 #import <voxy:util/depthutils.glsl>
 
 layout(binding = HIZ_BINDING) uniform sampler2D hizDepthSampler;
 
-//TODO: maybe do spher bounds aswell? cause they have different accuracies but are both over estimates (liberals (non conservative xD))
 // so can do &&
 
 bool within(vec2 a, vec2 b, vec2 c) {
@@ -53,15 +42,8 @@ UnpackedNode node22;
 //Sets up screenspace with the given node id, returns true on success false on failure/should not continue
 //Accesses data that is setup in the main traversal and is just shared to here
 void setupScreenspace(in UnpackedNode node) {
-    //TODO: Need to do aabb size for the nodes, it must be an overesimate of all the children
 
     node22 = node;
-    /*
-    Transform transform = transforms[getTransformIndex(node)];
-
-    vec3 point = VP*(((transform.transform*vec4((node.pos<<node.lodLevel) - transform.originPos.xyz, 1))
-                    + (transform.worldPos.xyz-camChunkPos))-camSubChunk);
-                    */
 
 
     vec3 basePos = vec3(((node.pos<<node.lodLevel)-camSecPos)<<5)-camSubSecPos;
@@ -73,7 +55,6 @@ void setupScreenspace(in UnpackedNode node) {
         return;
     }
 
-    //TODO: CHECK THIS IS AT ALL RIGHT
     vec4 P000 = MVP * vec4(basePos, 1);
     mat3x4 Axis = mat3x4(MVP)*float(32<<node.lodLevel);
     vec4 P100 = Axis[0] + P000;
@@ -84,14 +65,6 @@ void setupScreenspace(in UnpackedNode node) {
     vec4 P011 = Axis[1] + P001;
     vec4 P111 = Axis[1] + P101;
 
-    //vec4 P000 = MVP * vec4(basePos, 1);
-    //vec4 P100 = MVP * vec4(basePos+vec3(1,0,0)*(32<<node.lodLevel), 1);
-    //vec4 P001 = MVP * vec4(basePos+vec3(0,0,1)*(32<<node.lodLevel), 1);
-    //vec4 P101 = MVP * vec4(basePos+vec3(1,0,1)*(32<<node.lodLevel), 1);
-    //vec4 P010 = MVP * vec4(basePos+vec3(0,1,0)*(32<<node.lodLevel), 1);
-    //vec4 P110 = MVP * vec4(basePos+vec3(1,1,0)*(32<<node.lodLevel), 1);
-    //vec4 P011 = MVP * vec4(basePos+vec3(0,1,1)*(32<<node.lodLevel), 1);
-    //vec4 P111 = MVP * vec4(basePos+vec3(1,1,1)*(32<<node.lodLevel), 1);
 
 
     //Perspective divide + convert to screenspace (i.e. range 0->1 if within viewport)
@@ -150,10 +123,8 @@ bool outsideFrustum() {
 }
 
 bool isCulledByHiz() {
-    //if (node22.lodLevel!=0) return false;
 
     //Things start breaking down if the area is the entire scree, no idea why, just abort if we hit this case
-    //if ((maxBB.xy-minBB.xy)==vec2(1.0f)) return false;
     if (any(lessThan(abs(_maxBB.xy-_minBB.xy-vec2(1.0f)), vec2(0.000001f)))) return false;
 
     ivec2 ssize = ivec2(packedHizSize>>16,packedHizSize&0xFFFF);
@@ -170,7 +141,6 @@ bool isCulledByHiz() {
     ivec2 mnbb = ivec2(floor(_minBB.xy*ssize));
 
     float pointSample = (NEAR*3.0f)-1.0f;
-    //float pointSample2 = 0.0f;
     for (int x = mnbb.x; x<=mxbb.x; x++) {
         for (int y = mnbb.y; y<=mxbb.y; y++) {
             float sp = texelFetch(hizDepthSampler, ivec2(x, y), ml).r;
@@ -196,11 +166,6 @@ bool shouldDecend() {
     if (_screenSize > minSSS) {
         return true;
     }
-    //Perspective-stretch parity: planar projection stretches equal nodes to LARGER areas at the
-    //screen edges than at the centre (jacobian ~(1+tan^2(theta))^1.5), so the raw area test starves
-    //the middle of the screen of subdivision - centre mushy, edges sharp, worse at high FOV. Boost
-    //each node's area by maxStretch/stretch(nodePos): the centre is judged as if it sat at the
-    //screen's most favourable position, edges get boost~1 and keep their existing behaviour.
     vec2 ndcCenter = (_minBB.xy + _maxBB.xy) - 1.0f;
     vec2 tanPos = ndcCenter * vec2(invP00, invP11);
     float stretchNode = pow(1.0f + dot(tanPos, tanPos), 1.5f);

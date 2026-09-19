@@ -28,23 +28,11 @@ import java.util.WeakHashMap;
 
 public final class SableLodChunkManager {
     private static final TicketType<ChunkPos> VOXY_SABLE_LOD_TICKET = TicketType.create("voxy_sable_lod", Comparator.comparingLong(ChunkPos::toLong));
-    //Two ticket tiers. Distance 2 resolves to level 31 - ENTITY_TICKING - which is what keeps a
-    //distant ship's parent-world contraption entity moving; it goes only on the anchor chunk holding
-    //that entity. Everything else the tickets exist for - getChunkNow succeeding for the light sync,
-    //the physics gate answering loaded - needs residency, not ticking, and distance 0 (level 33, FULL)
-    //provides exactly that. Footprint-wide distance 2 had every chunk under every in-range ship
-    //running random ticks and entity AI: crops growing and mobs pathing under scenery 4000 blocks out.
     private static final int ANCHOR_TICKET_DISTANCE = 2;
     private static final int FOOTPRINT_TICKET_DISTANCE = 0;
 
     private static final Map<ServerLevel, LongSet> activeChunkLoads = new WeakHashMap<>();
 
-    //What the last rebuild saw, folded to one hash. The desired chunk set is a pure function of the
-    //range, the player chunk positions, each sub-level's footprint box and anchor, and the holding
-    //index - so while none of those move, the rebuild would reproduce the tickets it already placed.
-    //The tickets themselves never expire (TicketType.create without timeout), so skipping is safe.
-    //A hash miss (collision, or state the hash cannot see, like a holding sub-level appearing inside
-    //an already-loaded holding chunk) is bounded by the forced rebuild: at most 2 seconds stale.
     private static final class LevelSignature {
         long stateHash;
         long nextForcedRebuildTick;
@@ -97,10 +85,6 @@ public final class SableLodChunkManager {
             LongSet desiredFull = new LongOpenHashSet();
             LongSet desiredHoldingChunks = new LongOpenHashSet();
 
-            //Vanilla only ticks entities and block entities within the simulation distance; between it
-            //and the view distance a player can WATCH machinery that vanilla leaves frozen. A ship
-            //within that band is scenery someone is looking at, so it keeps the full-footprint
-            //ticking; only ships past watching range pay the anchor-only tier.
             double nearBlocks = Math.max(2, level.getServer().getPlayerList().getViewDistance()) * 16.0 + 32.0;
             double nearSq = nearBlocks * nearBlocks;
 
@@ -119,9 +103,6 @@ public final class SableLodChunkManager {
                     continue;
                 }
                 addChunkBounds(level, bounds, desiredFull, maxHorizontalDistanceSquared);
-                //The parent-world contraption entity lives at the logical pose; that one chunk keeps
-                //entity ticking so the ship can still move. Applied to parked ships too - an entity
-                //frozen at FULL can never initiate motion, so demoting by velocity would be a trap.
                 var anchor = subLevel.logicalPose().position();
                 desiredTicking.add(ChunkPos.asLong(Mth.floor(anchor.x()) >> 4, Mth.floor(anchor.z()) >> 4));
             }
@@ -131,9 +112,6 @@ public final class SableLodChunkManager {
             //Holding-derived footprint chunks may overlap a live anchor; the anchor tier wins
             desiredFull.removeAll(desiredTicking);
 
-            //Adds before removes: a chunk migrating tiers (the ship moved a chunk) briefly holds both
-            //tickets rather than neither, and removeRegionTicket is always called with the distance
-            //its ticket was added at - ticket identity includes the level.
             addMissingTickets(level, trackedTickingChunks, desiredTicking, ANCHOR_TICKET_DISTANCE);
             addMissingTickets(level, trackedFullChunks, desiredFull, FOOTPRINT_TICKET_DISTANCE);
             removeStaleTickets(level, trackedTickingChunks, desiredTicking, ANCHOR_TICKET_DISTANCE);
@@ -152,10 +130,6 @@ public final class SableLodChunkManager {
         }
     }
 
-    //Folds every input the desired sets depend on: range, player chunk positions, each live
-    //sub-level's identity, in-range verdict, chunk box and anchor chunk, and the holding index
-    //revision plus loaded-count. Order-sensitive mixing; iteration order changes force at worst one
-    //spurious rebuild, never a missed one beyond the forced cap.
     private static long computeStateHash(ServerLevel level, ServerSubLevelContainer container,
                                          double rangeBlocks, double maxHorizontalDistanceSquared) {
         long h = Double.doubleToLongBits(rangeBlocks);
@@ -343,11 +317,6 @@ public final class SableLodChunkManager {
                 LongIterator iterator = trackedHoldingChunks.iterator();
                 while (iterator.hasNext()) {
                     ChunkPos chunkPos = new ChunkPos(iterator.nextLong());
-                    //Only hand back the chunks we were artificially holding. Reporting one that vanilla
-                    //still has loaded as gone makes sable serialise and remove every sub-level standing in
-                    //it, and it is only restored on the next FullChunkStatus transition - a ship right next
-                    //to the player would disappear until its chunk happens to cycle. Same guard as
-                    //removeStaleHoldingChunkLoads.
                     if (PhysicsChunkTicketManager.isChunkLoadedEnough(level, chunkPos.x, chunkPos.z)) {
                         continue;
                     }

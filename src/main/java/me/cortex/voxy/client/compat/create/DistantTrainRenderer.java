@@ -5,14 +5,17 @@ import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.BogeyPose;
 import me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.ShapeBogey;
+import dev.engine_room.flywheel.api.visualization.VisualizationManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import org.joml.Matrix4f;
 import org.joml.Math;
 
 import java.util.List;
+import java.util.ArrayList;
 
 import static org.lwjgl.opengl.GL11C.GL_ALWAYS;
 import static org.lwjgl.opengl.GL11C.GL_CULL_FACE;
@@ -25,11 +28,15 @@ import static org.lwjgl.opengl.GL11C.glDepthFunc;
 import static org.lwjgl.opengl.GL11C.glDepthMask;
 import static org.lwjgl.opengl.GL11C.glDisable;
 import static org.lwjgl.opengl.GL11C.glEnable;
+import static org.lwjgl.opengl.GL11C.glColorMask;
 import static org.lwjgl.opengl.GL11C.glStencilFunc;
 import static org.lwjgl.opengl.GL11C.glStencilOp;
 import static org.lwjgl.opengl.GL20C.glUniform2f;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
+import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
+import static org.lwjgl.opengl.GL30C.glBindFramebuffer;
+import static org.lwjgl.opengl.GL11C.glViewport;
 
 //Draws distant train carriages as rigid meshes in the self-contained distant vertex format, inside
 //voxy's render pipeline on both backends (LOD-depth perfect occlusion; iris uses the patched shader).
@@ -39,15 +46,19 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
     public static java.util.function.Function<ShapeBogey, DistantMesh> bogeyMeshProvider;
     //Diagnostics for /voxy debug trains: how many carriages the last frame actually drew
     public static volatile int lastFrameCarriagesDrawn;
+    private static final ArrayList<DepthDraw> DEPTH_DRAWS = new ArrayList<>();
+    private static int depthDrawCount;
+    private static Viewport<?> depthViewport;
+
+    private static final class DepthDraw {
+        DistantMesh mesh;
+        final Matrix4f model = new Matrix4f();
+    }
 
     //Handover boundary shared with the live-side culls - see TrainHandover.
 
     @Override
     public void render(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline, Viewport<?> viewport, int depthFunc) {
-        //Both pipelines: draw into the pipeline's opaque target. Vertices are camera-relative world
-        //space and voxy's combined view-projection puts depth in the same space as the LOD terrain,
-        //so occlusion is per-pixel. On the iris pipeline the patched shader fills the g-buffer;
-        //bogeys still go through vanilla-style buffers, which cannot, so they skip there for now.
         pipeline.setupAndBindOpaque(viewport);
         //renderCommon only reads viewProjection (copies via transform.set), never mutates it
         this.renderCommon(pipeline, viewport, viewport.MVP,
@@ -56,11 +67,13 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
 
     private void renderCommon(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline, Viewport<?> viewport, Matrix4f viewProjection, double camX, double camY, double camZ, int depthFunc) {
         lastFrameCarriagesDrawn = 0;
+        beginDepthFrame(viewport);
         if (DistantTrainManager.isEmpty()) {
             return;
         }
         var cfg = VoxyConfig.CONFIG;
-        if (!cfg.isRenderingEnabled() || !cfg.distantTrains) {
+        if (!cfg.isRenderingEnabled() || !cfg.distantTrains
+                || !me.cortex.voxy.client.ServerCapabilities.trains()) {
             return;
         }
         var mc = Minecraft.getInstance();
@@ -71,24 +84,26 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
         var dimension = mc.level.dimension().location();
         double maxDist = cfg.createRenderDistance(cfg.distantTrainMaxChunks);
         double maxDistSq = maxDist * maxDist;
-        //Hand over at min(carriage tracking cap, full view distance) - the vanilla->LOD transition.
-        //The live culls use the same boundary so exactly one representation draws on either side.
-        double handover = TrainHandover.handoverDist();
-        double handoverSq = handover * handover;
+        double liveProbe = TrainHandover.handoverDist() + 64;
+        double liveProbeSq = liveProbe * liveProbe;
         long now = System.nanoTime();
         long nowMs = System.currentTimeMillis();
+        Vec3 cameraPos = new Vec3(camX, camY, camZ);
+        boolean flywheelRendering = VisualizationManager.supportsVisualization(mc.level);
 
         boolean renderStateActive = false;
         int drawn = 0;
         var transform = new Matrix4f();
-        var scratchPos = new net.minecraft.core.BlockPos.MutableBlockPos();
+        var model = new Matrix4f();
 
         try {
-            for (var train : DistantTrainManager.trains().values()) {
+            for (var trainEntry : DistantTrainManager.trains().entrySet()) {
+                var train = trainEntry.getValue();
                 if (!dimension.equals(train.dimension)) {
                     continue;
                 }
-                for (var track : train.carriages.values()) {
+                for (var carriageEntry : train.carriages.entrySet()) {
+                    var track = carriageEntry.getValue();
                     if (track.cur == null) {
                         continue;
                     }
@@ -115,22 +130,13 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
                     if (distSq > maxDistSq) {
                         continue;
                     }
-                    //Hand over to Create by the same rule vanilla uses to skip entities: the section
-                    //must be compiled AND the carriage must be close enough for its entity to still
-                    //be tracked. Only meaningful inside the tracking band - beyond it we always draw,
-                    //so the section lookup + BlockPos are skipped for the distant carriages that are
-                    //this renderer's whole purpose. The grace absorbs sodium's lazy recompiles.
-                    if (distSq < handoverSq) {
-                        if (mc.levelRenderer.isSectionCompiled(scratchPos.set(
-                                (int) java.lang.Math.floor(px), (int) java.lang.Math.floor(py), (int) java.lang.Math.floor(pz)))) {
-                            track.lastCompiledMs = nowMs;
-                        }
-                        if (nowMs - track.lastCompiledMs < 400) {
-                            continue;
-                        }
-                    }
                     var entry = DistantTrainManager.shape(track.shapeId);
                     if (entry == null) {
+                        continue;
+                    }
+                    if (distSq < liveProbeSq
+                            && TrainHandover.liveCarriageOwns(trainEntry.getKey(), carriageEntry.getKey(),
+                                    cameraPos, flywheelRendering)) {
                         continue;
                     }
 
@@ -164,26 +170,20 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
                         glDepthFunc(depthFunc);
                         glDepthMask(true);
                         glDisable(GL_CULL_FACE);
-                        //Depth-passing fragments get stencil=3: the sentinel-restore pass and
-                        //iris's depth-hack (both full-mask stencil==0) leave our depth intact,
-                        //while bit0 stays set so translucent LOD (EQUAL,1 mask 0x1) still
-                        //composites distant water in front of us
+                        //Bit 0 is clear so Voxy translucent terrain cannot cover train pixels.
                         glEnable(GL_STENCIL_TEST);
-                        glStencilFunc(GL_ALWAYS, 3, 0xFF);
+                        glStencilFunc(GL_ALWAYS, 2, 0xFF);
                         glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
                         renderStateActive = true;
                     }
 
-                    //Mirror of OrientedContraptionEntity.applyLocalTransforms: translate(-.5,0,-.5),
-                    //center, rotY(viewYRot), rotZ(viewXRot), rotY(initialYaw), uncenter - the first
-                    //two translations fold into (0, 0.5, 0). getViewYRot returns the negated yaw
-                    //field, so the negation belongs here; pitch passes through unnegated.
-                    transform.set(viewProjection)
+                    model.identity()
                             .translate((float) dx, (float) dy + 0.5f, (float) dz)
                             .rotateY((float) java.lang.Math.toRadians(-yaw))
                             .rotateZ((float) java.lang.Math.toRadians(pitch))
                             .rotateY((float) java.lang.Math.toRadians(entry.initialYaw()))
                             .translate(-0.5f, -0.5f, -0.5f);
+                    transform.set(viewProjection).mul(model);
                     DistantShaders.uploadTransform(transform);
                     glUniform2f(4,
                             (DistantLightSampler.block(track.lightPacked) * 16 + 8) / 256.0f,
@@ -191,12 +191,13 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
                     //Net model yaw of the transform chain above (pitch omitted - low grades)
                     DistantShaders.uploadFaceRotation(-yaw + entry.initialYaw());
                     entry.mesh().mesh.draw();
+                    recordDepthDraw(entry.mesh().mesh, model);
                     drawn++;
 
                     //Bogeys draw as captured snapshot meshes through the same shader (light uniform
                     //is already set to the carriage's); works identically on both pipelines
                     if (bogeyMeshProvider != null && !entry.bogeys().isEmpty()) {
-                        drawBogeys(track, entry, t, camX, camY, camZ, viewProjection, transform);
+                        drawBogeys(track, entry, t, camX, camY, camZ, viewProjection, transform, model);
                     }
                 }
             }
@@ -218,13 +219,14 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
     @SubscribeEvent
     public void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
         DistantTrainManager.clearAll();
+        beginDepthFrame(null);
     }
 
     //Interpolates each bogey pose and draws its snapshot mesh. Transform mirrors the tail of
-    //CarriageContraptionEntityRenderer.translateBogey (anchor -> yaw -> pitch -> +0.5y -> roll);
     //the -1.5078125 style offset is baked into the captured mesh. Wheel spin is a P4 follow-up.
     private static void drawBogeys(DistantTrainManager.CarriageTrack track, DistantTrainManager.ShapeEntry entry,
-                                   float t, double camX, double camY, double camZ, Matrix4f viewProjection, Matrix4f transform) {
+                                   float t, double camX, double camY, double camZ, Matrix4f viewProjection,
+                                   Matrix4f transform, Matrix4f model) {
         List<BogeyPose> cur = track.cur.bogeys();
         List<BogeyPose> prev = track.prev != null ? track.prev.bogeys() : cur;
         int count = java.lang.Math.min(cur.size(), entry.bogeys().size());
@@ -241,18 +243,69 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
             float yaw = p.yaw() + Mth.wrapDegrees(c.yaw() - p.yaw()) * t;
             float pitch = Math.lerp(p.pitch(), c.pitch(), t);
 
-            transform.set(viewProjection)
+            model.identity()
                     .translate((float) (x - camX), (float) (y - camY), (float) (z - camZ))
                     .rotateY((float) java.lang.Math.toRadians(yaw))
                     .rotateX((float) java.lang.Math.toRadians(pitch))
                     .translate(0.0f, 0.5f, 0.0f);
             if (c.upsideDown()) {
-                transform.rotateZ((float) java.lang.Math.PI);
+                model.rotateZ((float) java.lang.Math.PI);
             }
+            transform.set(viewProjection).mul(model);
             DistantShaders.uploadTransform(transform);
             DistantShaders.uploadFaceRotation(yaw);
             mesh.draw();
+            recordDepthDraw(mesh, model);
         }
+    }
+
+    private static void beginDepthFrame(Viewport<?> viewport) {
+        for (int i = 0; i < depthDrawCount; i++) {
+            DEPTH_DRAWS.get(i).mesh = null;
+        }
+        depthDrawCount = 0;
+        depthViewport = viewport;
+    }
+
+    private static void recordDepthDraw(DistantMesh mesh, Matrix4f model) {
+        DepthDraw draw;
+        if (depthDrawCount == DEPTH_DRAWS.size()) {
+            draw = new DepthDraw();
+            DEPTH_DRAWS.add(draw);
+        } else {
+            draw = DEPTH_DRAWS.get(depthDrawCount);
+        }
+        depthDrawCount++;
+        draw.mesh = mesh;
+        draw.model.set(model);
+    }
+
+    public static void replayDepthToSource(Viewport<?> viewport, int framebuffer, int width, int height, int depthFunc) {
+        if (depthViewport != viewport || depthDrawCount == 0 || width <= 0 || height <= 0) {
+            return;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glViewport(0, 0, width, height);
+        glColorMask(false, false, false, false);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(depthFunc);
+        glDepthMask(true);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_CULL_FACE);
+        DistantShaders.depthOnly().bind();
+        DistantShaders.bindTextures();
+
+        var sourceViewProjection = new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView);
+        var transform = new Matrix4f();
+        for (int i = 0; i < depthDrawCount; i++) {
+            var draw = DEPTH_DRAWS.get(i);
+            DistantShaders.uploadTransform(transform.set(sourceViewProjection).mul(draw.model));
+            draw.mesh.draw();
+        }
+        glBindVertexArray(0);
+        glUseProgram(0);
+        glColorMask(true, true, true, true);
+        glEnable(GL_CULL_FACE);
     }
 
     private static float interpFactor(DistantTrainManager.CarriageTrack track, long now) {

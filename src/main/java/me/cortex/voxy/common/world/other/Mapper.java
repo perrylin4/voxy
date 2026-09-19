@@ -42,6 +42,9 @@ import java.util.function.Consumer;
 //There are independent mappings for biome and block states, these get combined in the shader and allow for more
 // variaty of things
 public class Mapper {
+    private static final long SURFACE_CARRIER_BLOCK_MASK = (1L << 20) - 1L;
+    private static final long SURFACE_CARRIER_FLAG = 1L << 20;
+    private static final long SURFACE_CARRIER_MASK = SURFACE_CARRIER_FLAG | SURFACE_CARRIER_BLOCK_MASK;
     private static final int BLOCK_STATE_TYPE = 1;
     private static final int BIOME_TYPE = 2;
 
@@ -80,6 +83,10 @@ public class Mapper {
         return (id&(((1L<<20)-1)<<27)) == 0;
     }
 
+    public static int isNotAirInt(long id) {
+        return Math.min(getBlockId(id), 1);
+    }
+
     public static int getBlockId(long id) {
         return (int) ((id>>27)&((1<<20)-1));
     }
@@ -104,6 +111,31 @@ public class Mapper {
         return Integer.toUnsignedLong(light&0xFF)<<56;
     }
 
+    public static long makeSurfaceCarrier(long voxel) {
+        int block = getBlockId(voxel);
+        return (voxel & ~((((1L << 20) - 1L) << 27) | SURFACE_CARRIER_MASK))
+                | SURFACE_CARRIER_FLAG | Integer.toUnsignedLong(block);
+    }
+
+    public static boolean isSurfaceCarrier(long voxel) {
+        return (voxel & SURFACE_CARRIER_FLAG) != 0;
+    }
+
+    public static long clearSurfaceCarrier(long voxel) {
+        return voxel & ~SURFACE_CARRIER_MASK;
+    }
+
+    public static long restoreSurfaceCarrier(long voxel) {
+        int block = (int) (voxel & SURFACE_CARRIER_BLOCK_MASK);
+        return withBlockBiome(voxel, block, getBiomeId(voxel));
+    }
+
+    public static long applySurfaceCarrier(long below, long carrier) {
+        return withLight(
+                withBlockBiome(below, (int) (carrier & SURFACE_CARRIER_BLOCK_MASK), getBiomeId(carrier)),
+                getLightId(carrier));
+    }
+
     public void setStateCallback(Consumer<StateEntry> stateCallback) {
         this.newStateCallback = stateCallback;
     }
@@ -113,7 +145,6 @@ public class Mapper {
     }
 
     private void loadFromStorage() {
-        //TODO: FIXME: have/store the minecraft version the mappings are from (the data version)
         // SharedConstants.getGameVersion().dataVersion().id()
         // then use this to create an update path instead
 
@@ -147,6 +178,8 @@ public class Mapper {
                     DomumOrnamentumCompat.restoreVariant(
                             this, sentry.id, sentry.state, sentry.variantType, sentry.variantData);
                     me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.restoreVariant(
+                            this, sentry.id, sentry.state, sentry.variantType, sentry.variantData);
+                    me.cortex.voxy.commonImpl.compat.FramedBlocksCompat.restoreVariant(
                             this, sentry.id, sentry.state, sentry.variantType, sentry.variantData);
                     continue;
                 }
@@ -240,21 +273,40 @@ public class Mapper {
         buffer.rewind();
         this.storage.putIdMapping(entry.id | (BIOME_TYPE<<30), buffer);
         MemoryUtil.memFree(buffer);
-        //this.storage.flush();
 
         if (this.newBiomeCallback!=null)this.newBiomeCallback.accept(entry);
         return entry;
     }
 
 
-    //TODO:FIXME: IS VERY SLOW NEED TO MAKE IT LOCK FREE, or at minimum use a concurrent map
     public long getBaseId(byte light, BlockState state, Holder<Biome> biome) {
         if (state.isAir()) return Byte.toUnsignedLong(light) <<56;//Special case and fast return for air, dont care about the biome
         return composeMappingId(light, this.getIdForBlockState(state), this.getIdForBiome(biome));
     }
 
     public BlockState getBlockStateFromBlockId(int blockId) {
-        return this.blockId2stateEntry.get(blockId).state;
+        return this.stateEntryForRenderId(blockId).state;
+    }
+
+    private StateEntry stateEntryForRenderId(int blockId) {
+        if (blockId < this.blockId2stateEntry.size()) {
+            return this.blockId2stateEntry.get(blockId);
+        }
+        if (blockId == SeasonalIdSpace.VIRTUAL_ICE_ID) {
+            return SeasonalIdSpace.virtualIceEntry();
+        }
+        int real = SeasonalIdSpace.decode(this, blockId);
+        return this.blockId2stateEntry.get(real);//An unresolvable id throws here like any unknown id
+    }
+
+    public BiomeEntry getBiomeEntry(int biomeId) {
+        this.biomeLock.lock();
+        try {
+            return biomeId >= 0 && biomeId < this.biomeId2biomeEntry.size()
+                    ? this.biomeId2biomeEntry.get(biomeId) : null;
+        } finally {
+            this.biomeLock.unlock();
+        }
     }
 
     public int getIdForBlockState(BlockState state) {
@@ -310,7 +362,7 @@ public class Mapper {
     }
 
     public int getBlockStateOpacity(int blockId) {
-        return this.blockId2stateEntry.get(blockId).opacity;
+        return this.stateEntryForRenderId(blockId).opacity;
     }
 
     public int getIdForBiome(Holder<Biome> biome) {
@@ -329,7 +381,6 @@ public class Mapper {
         return (Byte.toUnsignedLong(light)<<56)|(Integer.toUnsignedLong(biomeId) << 47)|(Integer.toUnsignedLong(blockId)<<27);
     }
 
-    //TODO: fixme: synchronize access to this.blockId2stateEntry
     public StateEntry[] getStateEntries() {
         this.blockLock.lock();
         var set = new ArrayList<>(this.blockId2stateEntry);
@@ -345,7 +396,6 @@ public class Mapper {
         return out;
     }
 
-    //TODO: fixme: synchronize access to this.biomeId2biomeEntry
     public BiomeEntry[] getBiomeEntries() {
         this.biomeLock.lock();
         var set = new ArrayList<>(this.biomeId2biomeEntry);
@@ -395,6 +445,7 @@ public class Mapper {
     public void close() {
         DomumOrnamentumCompat.closeMapper(this);
         me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.closeMapper(this);
+        me.cortex.voxy.commonImpl.compat.FramedBlocksCompat.closeMapper(this);
     }
 
 

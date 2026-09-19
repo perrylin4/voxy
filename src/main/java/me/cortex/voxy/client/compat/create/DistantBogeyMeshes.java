@@ -14,10 +14,6 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import java.util.HashMap;
 import java.util.Map;
 
-//Captures Create bogey renderers (incl. addon styles) into the distant vertex format: the style
-//renderer streams its vertices into a capture consumer once (wheel angle 0), producing a static
-//snapshot mesh that both pipelines can draw with the distant shader. This replaces the vanilla
-//buffer path, which could not fill the iris g-buffer. Wheel spin is lost in the snapshot for now.
 public final class DistantBogeyMeshes {
     private static final Map<String, DistantMesh> CACHE = new HashMap<>();
     private static boolean errored;
@@ -78,9 +74,6 @@ public final class DistantBogeyMeshes {
         return builder.build();
     }
 
-    //MultiBufferSource + VertexConsumer capture: collects position/uv/normal per vertex and hands
-    //complete vertices to the builder. Light is uniform-driven at draw time; shade derives from the
-    //captured normal (matching vanilla's directional block shading).
     private static final class CaptureBufferSource implements MultiBufferSource, VertexConsumer {
         private final DistantMeshBuilder builder;
         private boolean pending;

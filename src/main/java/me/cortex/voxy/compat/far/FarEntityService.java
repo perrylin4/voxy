@@ -45,7 +45,8 @@ public final class FarEntityService {
     private int tickCounter;
 
     public void handleHello(ServerPlayer player, Hello hello) {
-        if (hello.version() != FarEntityProtocol.VERSION) {
+        if (hello.version() != FarEntityProtocol.VERSION
+                || !player.connection.hasChannel(PlayersPayload.TYPE)) {
             this.subscribers.remove(player.getUUID());
             return;
         }
@@ -75,7 +76,7 @@ public final class FarEntityService {
         Map<UUID, PlayerSnapshot> vehicleCache = new HashMap<>(players.size());
         for (ServerPlayer viewer : players) {
             ClientSettings settings = this.subscribers.get(viewer.getUUID());
-            if (settings != null && settings.enabled()) {
+            if (settings != null && settings.enabled() && viewer.connection.hasChannel(PlayersPayload.TYPE)) {
                 this.sendSnapshot(viewer, players, settings,
                         settings.includeVehicles() ? vehicleCache : playerOnlyCache);
             }

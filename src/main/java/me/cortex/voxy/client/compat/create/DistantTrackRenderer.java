@@ -10,6 +10,7 @@ import com.simibubi.create.content.trains.track.TrackBlock;
 import com.simibubi.create.content.trains.track.TrackShape;
 import me.cortex.voxy.client.compat.LodPipelineHooks;
 import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.client.core.rendering.LodBoundaryFade;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.Minecraft;
@@ -43,20 +44,8 @@ import static org.lwjgl.opengl.GL11C.glStencilOp;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 
-//Renders Create's track network out to LOD distances using the real track models, baked straight
-//from the client's synced TrackGraph into the self-contained distant vertex format - no vanilla
-//vertex pipeline anywhere, so geometry is immune to shader-environment corruption. Straights bake
-//the material's block model per section; turns replay the bezier segment transforms with the
-//material's partial models (smooth curves, addon monorails included). Visibility is the exact
-//complement of vanilla's: straights hide per compiled section, turns hide within the (clamped) BE
-//view distance, exactly where MixinTrackRenderer stops the real bezier BEs.
 public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
     private static final long RECHECK_INTERVAL_MS = 5000;
-    //Sodium compiles sections lazily (frustum + build queue): a section freshly entering the view
-    //reads "not compiled" for a few hundred ms even though vanilla is about to draw it, and it
-    //flips back on every head turn. Keeping a compiled verdict alive briefly stops the handover
-    //flickering LOD track in and out across the transition band (occlusion capture: 4/8 units
-    //flapping DRAW<->SKIP purely on isSectionCompiled).
     private static final long COMPILED_GRACE_MS = 400;
 
     private static final class MeshUnit {
@@ -92,9 +81,6 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
 
     @Override
     public void render(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline, Viewport<?> viewport, int depthFunc) {
-        //Both pipelines: draw into the pipeline's opaque target. Vertices are camera-relative world
-        //space and voxy's combined view-projection puts depth in the same space as the LOD terrain,
-        //so occlusion is per-pixel; the iris pipeline uses the shader pack's patched fragment shader.
         pipeline.setupAndBindOpaque(viewport);
         //renderCommon only reads viewProjection (copies via transform.set), never mutates it
         this.renderCommon(pipeline, viewport, viewport.MVP,
@@ -117,22 +103,17 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
 
         double maxDist = cfg.createRenderDistance(cfg.distantTrackMaxChunks) + 64;
         double maxDistSq = maxDist * maxDist;
-        //Bezier BEs off-screen render out to exactly this range (MixinTrackRenderer clamps their
-        //getViewDistance to it), so we take over precisely where they stop - same anchor, same
-        //threshold, no gap, no double-draw, and no isSectionCompiled flap since it is pure distance
-        double beViewDist = mc.options.getEffectiveRenderDistance() * 16.0;
-        double beViewDistSq = beViewDist * beViewDist;
+        var boundary = LodBoundaryFade.getDistances();
+        double handoffDist = boundary.enabled()
+                ? boundary.fadeStart()
+                : mc.options.getEffectiveRenderDistance() * 16.0;
+        double handoffDistSq = handoffDist * handoffDist;
 
         DistantShaders.forPipeline(pipeline, false).bind();
         DistantShaders.bindTextures();
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(depthFunc);
         glDepthMask(true);
-        //Draw everywhere (the pipeline's stencil gate would confine us to sky pixels) but tag every
-        //depth-passing fragment with stencil=3: the sentinel-restore pass and iris's depth-hack both
-        //rewrite only stencil==0 (full mask), so tagged pixels keep our real depth through
-        //SSAO/composite/the vanilla depth handback. Bit0 stays set because the translucent LOD pass
-        //tests EQUAL,1 under mask 0x1 - distant water must still composite in front of the meshes.
         glEnable(GL_STENCIL_TEST);
         glStencilFunc(GL_ALWAYS, 3, 0xFF);
         glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
@@ -149,16 +130,8 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
                 if (distSq > maxDistSq) {
                     continue;
                 }
-                //Hand over on vanilla's spherical view distance, for straights and turns alike.
-                //isSectionCompiled is not usable vertically: chunks load in a horizontal cylinder
-                //(full world height), so a section straight below the camera stays compiled even
-                //when it is far past the render distance and vanilla is not drawing it - keying on
-                //compiled made us yield forever there, leaving only voxy's voxelised collision box.
-                //Distance matches where vanilla actually renders (and where the bezier BEs, clamped
-                //to the same range, stop), so it gates both axes correctly. The compiled bookkeeping
-                //below is purely for the occlusion recorder - kept out of the live path so a large
-                //network does not pay an isSectionCompiled section-table lookup per unit per frame.
-                boolean vanillaDraws = distSq < beViewDistSq;
+                var m = unit.mesh;
+                boolean vanillaDraws = farthestDistanceSquared(unit, m, camX, camY, camZ) < handoffDistSq;
                 if (occlusionDebug) {
                     boolean rawCompiled = mc.levelRenderer.isSectionCompiled(unit.gate);
                     if (rawCompiled) {
@@ -171,10 +144,6 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
                 if (vanillaDraws) {
                     continue;
                 }
-                //Rail networks stretch across a map, so the share of track outside the view is high -
-                //higher than for machinery, which clusters where the player built. The mesh carries its
-                //own extent, which for a bezier is the only way to know how far the curve reaches.
-                var m = unit.mesh;
                 if (viewport != null && !DistantVisibility.isBoxVisible(viewport,
                         unit.ox + m.minX, unit.oy + m.minY, unit.oz + m.minZ,
                         unit.ox + m.maxX, unit.oy + m.maxY, unit.oz + m.maxZ)) {
@@ -198,6 +167,14 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
         }
     }
 
+    private static double farthestDistanceSquared(MeshUnit unit, DistantMesh mesh,
+                                                  double camX, double camY, double camZ) {
+        double dx = Math.max(Math.abs(unit.ox + mesh.minX - camX), Math.abs(unit.ox + mesh.maxX - camX));
+        double dy = Math.max(Math.abs(unit.oy + mesh.minY - camY), Math.abs(unit.oy + mesh.maxY - camY));
+        double dz = Math.max(Math.abs(unit.oz + mesh.minZ - camZ), Math.abs(unit.oz + mesh.maxZ - camZ));
+        return dx * dx + dy * dy + dz * dz;
+    }
+
     @SubscribeEvent
     public void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
         this.clearAll();
@@ -216,6 +193,7 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
     }
 
     private void clearAll() {
+        LodPipelineHooks.distantTrackMeshesReady = false;
         for (MeshUnit unit : this.units) {
             unit.close();
         }
@@ -238,9 +216,6 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
     private boolean backstopArmed;
     private static final long VERSION_QUIET_MS = 15000;
 
-    //Rebakes when the dimension changes, a graph with nodes in THIS dimension changes shape, or such a
-    //graph appears or disappears. getChecksum is cached by Create and only recomputed on node changes,
-    //so the interval check is a handful of field reads.
     private void maybeRebake(Minecraft mc) {
         var dimension = mc.level.dimension();
         boolean dimensionChanged = !dimension.equals(this.bakedDimension);
@@ -287,11 +262,6 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
             return; //graph mid-sync; retry next interval
         }
 
-        //version bumps on every sync packet the server sends, for every dimension - a signal placed in
-        //the nether must not rebake the overworld's network. It survives only as a quiet-period
-        //backstop for the rare edge change no graph checksum sees (an edge laid between two existing
-        //nodes): if version moved but nothing relevant did, one rebake fires after version has been
-        //quiet for a while.
         long version = CreateClient.RAILWAYS.version;
         if (version != this.lastVersion) {
             this.lastVersion = version;
@@ -317,6 +287,7 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
     }
 
     private void rebake(Minecraft mc, ResourceKey<Level> dimension) {
+        LodPipelineHooks.distantTrackMeshesReady = false;
         for (MeshUnit unit : this.units) {
             unit.close();
         }
@@ -356,12 +327,6 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
             }
         }
 
-        //A bezier's endpoints are real track blocks, and Create orients their shape toward the curve
-        //tangent - so bake them from the WORLD block state, authoritatively, before the straights.
-        //collectStraight would otherwise infer the endpoint shape from the straight edge's direction
-        //(pickShape); where a straight meets a curve at an angle that direction differs from the
-        //tangent and leaves a stray straight nub overlapping the first bend (the reported ghosting on
-        //certain link shapes). putIfAbsent in collectStraight then preserves this authoritative shape.
         for (Turn turn : turns) {
             var bc = turn.bc();
             putAnchorBlock(mc, bc.bePositions.getFirst(), straightBlocks);
@@ -391,6 +356,7 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
             this.bakeTurn(mc, turn.bc());
         }
         tileCount = this.units.size();
+        LodPipelineHooks.distantTrackMeshesReady = !this.units.isEmpty();
     }
 
     private record Turn(TrackGraph graph, TrackEdge edge, com.simibubi.create.content.trains.track.BezierConnection bc) {}
@@ -399,10 +365,6 @@ public final class DistantTrackRenderer implements LodPipelineHooks.Renderer {
 
     private record StraightBlock(BlockPos pos, BlockState state) {}
 
-    //Bakes a bezier endpoint from its real world block state (Create sets the shape toward the curve
-    //tangent). put(), not putIfAbsent(), so it wins over any straight pickShape already placed; the
-    //later collectStraight then skips it via putIfAbsent. Only tracks - non-track (unloaded/edited) is
-    //left to collectStraight/the curve.
     private static void putAnchorBlock(Minecraft mc, BlockPos pos, Map<BlockPos, BlockState> out) {
         if (mc.level == null) {
             return;

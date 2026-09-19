@@ -9,16 +9,6 @@ import net.minecraft.core.BlockPos;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 
-//The kinetic visual family that does not override beginFrame - the shaft/cogwheel/gearbox/belt/fan/
-//waterwheel/saw majority that a base is wired from. These are SimpleTickableVisuals: tick pushes the
-//rotation params, the GPU spins the RotatingInstance, and there is no per-frame callback to hang a
-//distance check on. Making the shared base a SimpleDynamicVisual gets Flywheel to call beginFrame each
-//frame for every one of them (Storage.setup enrols on `instanceof SimpleDynamicVisual`, inherited here;
-//the default engine and colorwheel's ClrwlEngine both honour it), so the moving instances can be hidden
-//beyond the render distance and revealed on return.
-//
-//Machines that override beginFrame (press/mixer/deployer/arm/...) would shadow this one, so they are
-//culled by MixinKineticMachineVisuals instead; the vanilla-BER fallback by MixinSafeBlockEntityRenderer.
 @Mixin(KineticBlockEntityVisual.class)
 public abstract class MixinKineticBlockEntityVisual implements SimpleDynamicVisual {
     @Unique private boolean voxy$culled;
@@ -31,10 +21,6 @@ public abstract class MixinKineticBlockEntityVisual implements SimpleDynamicVisu
                 ((AccessorAbstractBlockEntityVisual) this).voxy$getPos());
     }
 
-    //Throttled enclosure verdict: 6 block lookups are too dear per visual per frame, and neighbours
-    //rarely change - re-evaluate every ~8 ticks, staggered by position so a base's visuals do not all
-    //re-check on the same frame. Game time, not wall clock: a per-visual-per-frame currentTimeMillis
-    //added up across a large base.
     @Unique private boolean voxy$enclosed;
     @Unique private long voxy$nextCheckTick;
 

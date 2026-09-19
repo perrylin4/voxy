@@ -7,11 +7,14 @@ layout(binding = 0, std140) uniform SceneUniform {
     float circularLodBoundaryEnabled;
     float lodBoundaryFadeStart;
     float lodBoundaryFadeEnd;
+    float framedBlocksMaxDistanceSquared;
+    vec2 worldCurveData;
+    float distantTracksEnabled;
     float _scenePadding;
-    vec4 worldCurveData;
+    uint prevBuildFrameId;
+    uint visibilityGraceId;
 };
 
-//TODO: see if making the stride 2*4*4 bytes or something cause you get that 16 byte write
 struct DrawCommand {
     uint  count;
     uint  instanceCount;

@@ -6,12 +6,6 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
-//Dedicated-server config (voxy-server.toml, a Type.SERVER config stored per-world under
-//serverconfig/) giving the admin a uniform ceiling for distant-train pose streaming that applies to
-//every player. This is the only distant-train control a dedicated server has - there is no per-client
-//preference sync - and on the integrated server it further caps the host client's own preference.
-//Values are pushed into DistantTrainConfig (read by the sampler) whenever the config loads or reloads.
-//Registered only when Create is present, so a Create-free server never grows the file or the listeners.
 public final class CreateServerConfig {
     private CreateServerConfig() {}
 

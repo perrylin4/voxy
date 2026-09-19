@@ -8,11 +8,6 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 public class ImportManager {
-    //TODO:
-    //Taskbar.INSTANCE.setProgress(0,10000);
-    //Taskbar.INSTANCE.setIsProgression();
-    //Taskbar.INSTANCE.setProgress(a, Math.max(1, b));
-    //Taskbar.INSTANCE.setIsNone();
 
     private final Map<WorldEngine, ImportTask> activeImporters = new HashMap<>();
 
@@ -40,7 +35,6 @@ public class ImportManager {
                 return false;
             this.timer = System.currentTimeMillis();
 
-            //TODO: THING
 
             return true;
         }
@@ -112,9 +106,6 @@ public class ImportManager {
     }
 
     private synchronized void jobFinished(ImportTask task) {
-        //if (!task.isCompleted()) {
-        //    throw new IllegalStateException();
-        //}
 
         var remTask = this.activeImporters.remove(task.importer.getEngine());
         if (remTask != null) {

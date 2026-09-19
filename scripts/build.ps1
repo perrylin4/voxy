@@ -1,18 +1,14 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('integrations-1.21.1', 'client-1.21.1', 'client-1.20.1', 'client-26.1.2')]
+    [ValidateSet('neoforge-1.21.1', 'client-1.20.1', 'client-26.1.2')]
     [string]$Edition
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $targets = @{
-    'integrations-1.21.1' = @{
+    'neoforge-1.21.1' = @{
         Path = $repo
-        Java = 21
-    }
-    'client-1.21.1' = @{
-        Path = Join-Path $repo 'editions/neoforge-1.21.1-client'
         Java = 21
     }
     'client-1.20.1' = @{

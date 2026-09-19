@@ -52,7 +52,6 @@ public class MixinRenderSectionManager {
 
     @Inject(method = "onChunkRemoved", at = @At("HEAD"))
     private void voxy$injectIngest(int x, int z, CallbackInfo ci) {
-        //TODO: Am not quite sure if this is right
         if (VoxyConfig.CONFIG.ingestEnabled && !BOBBY_INSTALLED) {
             var cccm = (ICheekyClientChunkCache)this.level.getChunkSource();
             if (cccm != null) {
@@ -78,16 +77,6 @@ public class MixinRenderSectionManager {
         }
     }
 
-    /*
-    @Inject(method = "onChunkRemoved", at = @At("HEAD"))
-    private void voxy$trackChunkRemove(int x, int z, CallbackInfo ci) {
-        if (this.level.worldRenderer != null) {
-            var system = ((IGetVoxyRenderSystem)(this.level.worldRenderer)).getVoxyRenderSystem();
-            if (system != null) {
-                system.chunkBoundRenderer.removeSection(ChunkPos.toLong(x, z));
-            }
-        }
-    }*/
 
     @Unique private long cachedChunkPos = -1;
     @Unique private int cachedChunkStatus;
@@ -123,7 +112,6 @@ public class MixinRenderSectionManager {
             }
             if (this.cachedChunkStatus == 3) {//If this chunk still has surrounding chunks
                 var cccm = this.level.getChunkSource();
-                //var chunk = ((ICheekyClientChunkCache)cccm).voxy$cheekyGetChunk(x, z);
                 //Dont thinks need to use cheekyGetChunk here as thats handled by the inject into head of onChunkRemoved
                 // but only ingest if the chunkstatus is full and exists
                 var chunk = cccm.getChunk(x, z, ChunkStatus.FULL, false);
@@ -136,7 +124,6 @@ public class MixinRenderSectionManager {
                     var slp = lp.getLayerListener(LightLayer.SKY).getDataLayerData(csp);
 
                     //Note: we dont do this check and just blindly ingest, it shouldbe ok :tm:
-                    //if (blp != null || slp != null)
                         VoxelIngestService.rawIngest(system.getEngine(), chunk, section, x, y, z, blp == null ? null : blp.copy(), slp == null ? null : slp.copy());
                 }
             }

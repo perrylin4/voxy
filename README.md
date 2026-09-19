@@ -2,78 +2,93 @@
 
 [English](README_EN.md)
 
-Neo Voxy 由 **JohnSnow** 维护，在 [NHblock714/voxy](https://github.com/NHblock714/voxy) 的基础上继续维护多版本、客户端优化与可选模组兼容。
+Neo Voxy 由 **JohnSnow** 维护，基于 [NHblock714/voxy](https://github.com/NHblock714/voxy) 继续维护多版本、客户端优化与可选模组联动。
 
 > [!IMPORTANT]
-> 更新 Neo Voxy 后若出现异常，请先删除 Neo Voxy 配置文件和对应存档中的 Voxy 缓存，再重新进入世界。
+> 更新 Neo Voxy 后若出现异常，请先删除 Neo Voxy 配置文件和对应存档中的 Voxy 缓存。
 >
-> **构建产物说明**：构建产物已被我人为删除。需要获得 JAR 时，请直接 Fork 本仓库，
-> 在 GitHub Actions 中下载自动构建产物，或按构建教程手动构建。
+> **构建产物**：GitHub Actions 构建产物已被人为删除。请 Fork 本仓库，并在自己的仓库中运行 `Build Neo Voxy multiversion` 后下载产物；也可按照下方教程手动构建。本分支偶尔可能仍显示尚未及时删除的 Actions 构建产物。
 >
-> **服务器数据共享**：Neo-Voxy 与 **Voxy Server Side** 完全兼容，推荐在服务器端部署它
-> 以共享 LOD 数据。
-
+> **服务器数据共享**：Neo Voxy 兼容 [voxy-server-side](https://www.curseforge.com/minecraft/mc-mods/voxy-server-side-forge-neoforge)，可在服务器端部署以共享 LOD 数据。
+>
+> **渲染前置**：NeoForge 使用 Sodium，Forge 使用 Embeddium。Sinytra Connector 与 Forgified Fabric API 不是本项目依赖，不建议额外安装。
 
 ## 支持版本
 
-| 版本 | 安装位置 | 渲染依赖 | Java | 发布文件 |
+| 版本 | 安装位置 | 渲染前置 | Java | 发布文件 |
 |---|---|---|---:|---|
-| 1.21.1 NeoForge 联动版 | 客户端与服务端 | Sodium 0.8 / Iris | 21 | `neo-voxy-0.4.3-beta.1-mc1.21.1-neoforge-integrations.jar` |
-| 1.21.1 NeoForge 纯客户端版 | 仅客户端 | Sodium 0.8 / Iris | 21 | `neo-voxy-0.3.0-mc1.21.1-neoforge-client.jar` |
-| 1.20.1 Forge 纯客户端版 | 仅客户端 | Embeddium / Oculus | 17 | `neo-voxy-0.3.1-forge-client.jar` |
-| 26.1.2 NeoForge 纯客户端版 | 仅客户端 | Sodium 0.9.2-alpha.4+ / Iris 1.11.2+ | 25 | `neo-voxy-0.3.1-mc26.1.2-neoforge-client.jar` |
+| Minecraft 1.21.1 · NeoForge | 客户端必装，服务端可选 | Sodium 0.8.x / Iris 1.8.12+ | 21 | `neo-voxy-0.5.2-mc1.21.1-neoforge.jar` |
+| Minecraft 1.20.1 · Forge | 仅客户端 | Embeddium / Oculus | 17 | `neo-voxy-0.3.5-mc1.20.1-forge-client.jar` |
+| Minecraft 26.1.2 · NeoForge | 仅客户端 | Sodium 0.9.1 / Iris 1.11.2+ | 25 | `neo-voxy-0.3.3-mc26.1.2-neoforge-client.jar` |
 
-最终发布 JAR 会剔除不需要的平台原生库、重复模块描述符和构建中间文件；运行所需的着色器、语言、模型与存储依赖不会删除。
+## 安装与服务器兼容（1.21.1）
 
-## 功能与兼容性对比
+1.21.1 从 0.5.0 起只发布一个 JAR，不再区分联动版与纯客户端版。客户端必须安装才能使用远景；服务端可选安装同一个 JAR，服务端不需要 Sodium 或 Iris。不要同时安装旧的两个版本。
 
-| 功能、模组或组件 | 1.21.1 联动版 | 1.21.1 客户端版 | 1.20.1 客户端版 | 26.1.2 客户端版 | 说明 |
-|---|:---:|:---:|:---:|:---:|---|
-| 地形 LOD、多级细节与持久缓存 | ✅ | ✅ | ✅ | ✅ | 基础远景功能 |
-| Sodium / Embeddium 设置界面集成 | ✅ | ✅ | ✅ | ✅ | Neo Voxy 设置入口 |
-| Iris / Oculus 光影管线 | ✅ | ✅ | ✅ | ✅ | 1.20.1 已支持光影；不同光影包的适配程度可能不同 |
-| 环境雾、天空雾与流体修复 | ✅ | ✅ | ✅ | ✅ | 包含水下等必要介质遮罩 |
-| 圆形 LOD 淡入 | ✅ | ✅ | ❌ | ✅ | 1.20.1 不考虑加入；其他版本在光影自带 LOD 过渡时建议关闭 |
-| 地面植物交叉模型 | ✅ | ✅ | ✅ | ✅ | 居中的轻量交叉模型 |
-| 树叶 LOD 模式 | ✅ | ✅ | ✅ | ✅ | 性能、平衡与质量模式 |
-| 扩展区块请求（单人，上限 48） | ✅ | ✅ | ✅ | ✅ | 默认关闭 |
-| LOD 群系水色混合 | ✅ | ✅ | ✅ | ✅ | 构建阶段完成 |
-| LOD 构建压力控制 | ✅ | ✅ | ✅ | ✅ | 可侧重帧率或追赶速度 |
-| 世界曲率 | ✅ | ✅ | ✅ | ✅ | GPU 顶点阶段实现 |
-| 远距离信标光束 | ✅ | — | — | — | 无限距离连续宽度曲线、光影阴影与无缝交接 |
-| 远距离玩家、乘骑物与动画 | ✅ | — | — | — | 联动版专项功能 |
-| Sodium / Iris | ✅ | ✅ | — | ✅ | 26.1.2 使用 Sodium 0.9.2-alpha.4+ 与 Iris 1.11.2+ |
-| Embeddium / Oculus | — | — | ✅ | — | Embeddium 为渲染后端，Oculus 提供光影支持 |
-| Create | ✅ | — | — | — | 远景列车、轨道、动态结构与动力部件 |
-| Sable | ✅ | — | — | — | 远景物理结构及深度兼容 |
-| Ecliptic Seasons | ✅ | — | — | — | 远景季节积雪 |
-| Domum Ornamentum | ✅ | — | — | — | 完全兼容：精细独立模型、材质与持久缓存 |
-| LittleTiles | 🧪 | — | — | — | 初步兼容：静态结构使用持久化的 1/8 格轻量 LOD 网格 |
+- 服务器未安装 Neo Voxy：保留本地地形 LOD、光影、缓存及可在客户端完成的联动。不会向不支持的服务器发送 Neo Voxy 订阅包。
+- 服务器提供对应通道：启用远景玩家与载具、Create 列车和动态结构位置同步。无对应通道时自动停用依赖它的功能，设置页显示不可用，保留用户开关供下次支持的连接使用。
+- Create 动态结构没有服务端支持时仍可显示本地静态快照；视距外实时运动不可用。扩展区块请求仅用于单人内置服务器。
+- 地形 LOD 只包含客户端已获取或已有缓存的数据；服务端可选不意味着能绕过服务器视距获得未知地形。服务器安装其他模组的要求不受此规则影响。
 
-`✅` 表示支持，`🧪` 表示初步兼容，`—` 表示未包含专项功能或不适用；后者不代表基础地形 LOD 一定与该模组冲突。专项联动仅在对应模组已安装时启用。Create、Sable 与节气兼容来自 **NHblock**。
+1.20.1 与 26.1.2 保留现有平台版本及安装位置，本次未为其新增服务端功能。
 
-### 主要可调功能
+## 实验性优化
 
-- 地面植物与树叶：四个版本都提供居中的交叉植物 LOD，以及性能、平衡、质量三种树叶模式。平衡模式剔除隐藏内部面并保留稳定、不对称的镂空；所有树叶均跳过透明淡入，直接在原版与 LOD 模型间交接，避免先消失再重现。
-- 扩展区块请求：基于 [FakeSight](https://github.com/MoePus/fakesight) 的思路，让 Voxy 在单人游戏中请求原版距离外的区块。四个版本均默认关闭、上限 48 区块；移动时暂停扩张，静止后缓慢增加请求半径。高距离仍会显著增加 CPU、内存、世界生成与存档负载。
-- 群系水色混合：四个版本都可在模型构建阶段平滑群系交界处的 LOD 水色；结果写入紧凑调色板。
-- LOD 构建压力：可在“最高帧数”到“最高追赶”之间调节每帧节点处理与模型烘焙预算。
-- 圆形 LOD 淡入：包含该功能的版本使用三维相机距离和世界坐标稳定抖动，在原版区块与 LOD 之间交接；水体与树叶采用各自的无透明渐变交接策略。若光影自身已有 LOD 过渡（例如 Photon），应关闭此功能，避免双重过渡、噪点或阴影边界。
-- 雾气与效果：1.20.1 与 1.21.1 的无光影雾按 LOD 半径计算，并保留水下等必要介质遮罩；失明和黑暗生效时不会让远景 LOD 穿透效果范围。26.1.2 使用新版原生雾管线。
-- 模型与水体质量：逐面独立生成 mip、按像素记录染色掩码，改善草侧面与含水植物错染；降采样使用就近取整，水体拥有独立边界和群系色调处理。
-- 实验性 LOD 轻量光照：1.21.1 联动版可使用成对的 Lite 程序；默认关闭，加载或编译失败、版本不匹配及过渡条件不安全时自动整套回退。Eclipse Shader 482 由 NeoVoxy 内置补丁支持，无需修改光影包；Complementary Unbound r5.8.1 + Euphoria Patches 1.9.3 使用独立 overlay。
-- 细分尺寸：控制屏幕空间触发更细 LOD 的阈值；数值越小画质越高，构建和渲染开销也越高。
-- 世界曲率：四个版本均可在 GPU 顶点阶段弯曲原版距离外的 LOD；0 为关闭。
-- 远景信标：联动版以缓存列生成光柱；靠近时确认原版光柱已就绪后再交接，极远距离使用平缓且无硬上限的宽度曲线，并在 Iris 阴影阶段提交轻量阴影模型。
-- 进服消息：每次进入服务器或单人世界显示版本提示，默认开启，可在 Sodium/Embeddium 的 Neo Voxy 配置中关闭。
+实验性页面包含静止时优化、显卡负担优化、内存缓存、远近地形过渡和光影简化。提供静止复用、遮挡精度、Hi-Z 批量计算与缓存上限等选项；说明列出帧率、画面、延迟和内存取舍。Hi-Z 编译失败会回退并提示。请逐项比较效果，不保证所有硬件均有性能提升。
+
+## 原版功能
+
+| 原版功能 | 1.21.1 | 1.20.1 | 26.1.2 | 功能说明 |
+|---|:---:|:---:|:---:|---|
+| 地形 LOD 与多级细节 | ✅ | ✅ | ✅ | 渲染远距离地形 |
+| Sodium / Embeddium 设置集成 | ✅ | ✅ | ✅ | 提供 Neo Voxy 设置入口 |
+| Iris / Oculus 光影管线 | ✅ | ✅ | ✅ | 提供对应平台的光影渲染支持 |
+| 环境雾、天空雾与流体效果 | ✅ | ✅ | ✅ | 修复远景雾效与流体显示 |
+| 圆形 LOD 交接 | ✅ | ❌ | ✅ | 在原版区块与 LOD 之间进行圆形交接 |
+| 地面植物交叉模型 | ✅ | ✅ | ✅ | 使用轻量交叉模型显示植物 |
+| 树叶 LOD 模式 | ✅ | ✅ | ✅ | 提供性能、平衡和质量模式 |
+| 扩展区块请求 | ✅ | ✅ | ✅ | 单人游戏中请求更远区块，默认关闭 |
+| LOD 群系水色 | ✅ | ✅ | ✅ | 处理不同群系之间的水色过渡 |
+| LOD 构建压力控制 | ✅ | ✅ | ✅ | 调整帧率与构建速度的优先级 |
+| 世界曲率 | ✅ | ✅ | ✅ | 在 GPU 顶点阶段弯曲远景地形 |
+| 远景信标光束 | ✅ | — | — | 在远距离显示信标光束 |
+| 扩展高度世界坐标 | ✅ | — | — | 支持超出原版高度范围的 LOD |
+
+`✅` 表示支持，`❌` 表示未提供，`—` 表示不适用。圆形 LOD 交接与光影包自带的交接功能同时启用时，建议关闭其中一项。
+
+## Mod 联动功能
+
+联动功能仅在对应 Mod 已安装时启用。版本列表示当前联动代码的 Minecraft 与 Mod 验证基线。
+
+| Mod（中文 / English）与版本 | 状态 | 联动功能 |
+|---|:---:|---|
+| [机械动力 / Create](https://www.curseforge.com/minecraft/mc-mods/create)<br>MC 1.21.1 + Create 6.0.10 | ✅ | 覆盖远景列车、轨道、动态结构与动力部件 |
+| [机械动力：航空学 / Create Aeronautics](https://www.curseforge.com/minecraft/mc-mods/create-aeronautics)<br>MC 1.21.1 + Aeronautics 1.3.2 | 🧪 | 覆盖模拟结构的远景显示 |
+| [机械动力：模拟 / Create Simulated](https://www.curseforge.com/minecraft/mc-mods/create-aeronautics)<br>MC 1.21.1 + Simulated 1.3.2 | 🧪 | 覆盖激光指示器远景光束 |
+| [机械动力：交错电网 / Create: Power Grid](https://www.curseforge.com/minecraft/mc-mods/power-grid)<br>MC 1.21.1 + Power Grid 0.6.1 | ✅ | 覆盖悬垂线、方块折线、软线和灯串线 |
+| [机械动力：伪装方块+ / Create: Copycats+](https://www.curseforge.com/minecraft/mc-mods/copycats)<br>MC 1.21.1 + Copycats+ 3.0.9 | ✅ | 覆盖斜坡、切片、门、传动杆和齿轮的专属 LOD 模型与材质 |
+| [Sable / Sable](https://www.curseforge.com/minecraft/mc-mods/sable)<br>MC 1.21.1 + Sable 2.0.5 | ✅ | 覆盖远景物理结构与深度衔接 |
+| [节气 / Ecliptic Seasons](https://www.curseforge.com/minecraft/mc-mods/ecliptic-seasons)<br>MC 1.21.1 + Ecliptic Seasons 0.15.0-rc-3-1 | ✅ | 覆盖季节积雪、结冰水体、季节模型与颜色 |
+| [模拟殖民地 / Domum Ornamentum](https://www.curseforge.com/minecraft/mc-mods/domum-ornamentum)<br>MC 1.21.1 + Domum Ornamentum 1.0.236-snapshot | ✅ | 覆盖精细装饰模型与材质 |
+| [框架方块 / FramedBlocks](https://www.curseforge.com/minecraft/mc-mods/framedblocks)<br>MC 1.21.1 + FramedBlocks 10.6.1 | ✅ | 覆盖框架方块与伪装材质 |
+| [小方块 / LittleTiles](https://www.curseforge.com/minecraft/mc-mods/littletiles)<br>MC 1.21.1 + LittleTiles 1.6.0-pre226 | 🧪 | 覆盖静态小方块 LOD 网格 |
+
+## 主要选项
+
+- 树叶模式：在性能、平衡和质量之间选择树叶 LOD 的显示方式。
+- 扩展区块请求：单人游戏中请求原版视距之外的区块，默认关闭，最多请求 48 区块。
+- LOD 构建压力：在最高帧率和最高追赶速度之间调节构建预算。
+- 圆形 LOD 交接：控制原版区块与 LOD 的交接效果；使用光影包自带交接时建议关闭。
+- 渲染精度：七档滑块，从极低到极高；默认标准档（256），较高档为 123，极高档为 28。提高精度会增加细节和开销。树叶模式使用性能、平衡、质量三档滑块。
+- 世界曲率：控制远景地形弯曲程度，0 为关闭。
+- 联动开关：各项 Mod 联动均提供独立的启用开关和距离选项。
 
 ## 构建
 
 Windows 单独构建：
 
 ```powershell
-.\scripts\build.ps1 integrations-1.21.1
-.\scripts\build.ps1 client-1.21.1
+.\scripts\build.ps1 neoforge-1.21.1
 .\scripts\build.ps1 client-1.20.1
 .\scripts\build.ps1 client-26.1.2
 ```
@@ -84,12 +99,7 @@ Windows 单独构建：
 .\scripts\build-all.ps1
 ```
 
-脚本优先读取 `JAVA_HOME_17`、`JAVA_HOME_21` 与 `JAVA_HOME_25`。Linux/macOS 可使用 `scripts/build.sh` 和 `scripts/build-all.sh`。最终产物统一复制到 `dist/`；GitHub Actions 会并行构建四个版本并发布一个 `neo-voxy-multiversion` 整合产物。
-
-## 开发说明
-
-部分代码使用了 AI 辅助完成，发布前会由维护者审核并进行必要的小幅修改；相较完全手写，
-这能显著提高开发效率。源码注释保持简洁，打包的第三方库保留其原许可证。
+脚本优先读取 `JAVA_HOME_17`、`JAVA_HOME_21` 和 `JAVA_HOME_25`。Linux/macOS 可使用 `scripts/build.sh` 和 `scripts/build-all.sh`。最终产物复制到 `dist/`。
 
 ## 许可证
 

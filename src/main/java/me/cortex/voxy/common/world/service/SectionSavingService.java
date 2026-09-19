@@ -11,7 +11,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
-//TODO: add an option for having synced saving, that is when call enqueueSave, that will instead, instantly
 // save to the db, this can be useful for just reducing the amount of thread pools in total
 // might have some issues with threading if the same section is saved from multiple threads?
 public class SectionSavingService {
@@ -30,12 +29,6 @@ public class SectionSavingService {
     private static final int MAX_BATCH_SECTIONS = 64;
     private static final long MAX_BATCH_BYTES = 4L << 20;
 
-    //Set while this thread is inside processJob. finishBatch releases the sections it just wrote, and a
-    //release can run the section straight back through tryUnload -> saveSection -> enqueueSave; without
-    //this flag that call takes the self-help drain below and re-enters processJob, nesting another native
-    //WriteBatch per level and releasing up to MAX_BATCH_SECTIONS more sections to recurse on. A sustained
-    //backlog (world import, first flight over new terrain) is exactly when the queue sits above the
-    //threshold, so this is reachable, not theoretical.
     private static final ThreadLocal<Boolean> DRAINING = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
     private void processJob() {
@@ -121,9 +114,6 @@ public class SectionSavingService {
         section.release();
     }
 
-    //release() only after the commit: while a section is held it stays in the tracker's loaded cache,
-    //so WorldEngine.isWorldUsed() is true and the idle cleaner cannot free the world (and close the
-    //storage) out from under a batch that still has staged writes.
     private void finishBatch(SectionStorage.SectionSaveBatch batch, List<WorldSection> staged) {
         if (staged.isEmpty()) {
             return;
@@ -147,14 +137,6 @@ public class SectionSavingService {
         staged.clear();
     }
 
-    /*
-    public void enqueueSave(WorldSection section) {
-        if (section._getSectionTracker() != null && section._getSectionTracker().engine != null) {
-            this.enqueueSave(section._getSectionTracker().engine, section);
-        } else {
-            Logger.error("Tried saving world section, but did not have world associated");
-        }
-    }*/
 
     public boolean enqueueSave(WorldEngine in, WorldSection section, boolean nonBlocking, boolean sectionAlreadyAcquired) {
         //If its not enqueued for saving then enqueue it
@@ -168,12 +150,6 @@ public class SectionSavingService {
             if ((!nonBlocking) && !DRAINING.get() && this.getTaskCount() > SOFT_MAX_QUEUE_SIZE) {
                 //wait a bit
                 Thread.yield();
-                /*
-                try {
-                    Thread.sleep(10);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }*/
                 //If we are still full, process entries in the queue ourselves instead of waiting for the service
                 while (this.getTaskCount() > SOFT_MAX_QUEUE_SIZE && this.service.isLive()) {
                     if (!this.service.steal()) {

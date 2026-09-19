@@ -20,6 +20,28 @@ public class WorldVoxilizedSectionMipper {
       return (y << 2 | z << 1 | x) + 64 + 512 + 4096;
    }
 
+   private static void resolveSurfaceCarriers(long[] data, int base, int size) {
+      int layer = size * size;
+      for (int y = 0; y < size; y++) {
+         for (int z = 0; z < size; z++) {
+            for (int x = 0; x < size; x++) {
+               int index = base + y * layer + z * size + x;
+               long carrier = data[index];
+               if (!Mapper.isSurfaceCarrier(carrier)) continue;
+               if (y == 0) continue;
+               int belowIndex = index - layer;
+               long below = data[belowIndex];
+               if (!Mapper.isAir(below)) {
+                  data[belowIndex] = Mapper.applySurfaceCarrier(below, carrier);
+                  data[index] = Mapper.clearSurfaceCarrier(carrier);
+                  continue;
+               }
+               data[index] = Mapper.restoreSurfaceCarrier(carrier);
+            }
+         }
+      }
+   }
+
    public static void mipSection(VoxelizedSection section, Mapper mapper) {
       long[] data = section.section;
       int i = 0;
@@ -40,6 +62,7 @@ public class WorldVoxilizedSectionMipper {
             mapper
          );
          if (q == MSK) {
+            resolveSurfaceCarriers(data, 4096, 8);
             i = 0;
 
             for (int y = 0; y < 8; y += 2) {
@@ -60,6 +83,8 @@ public class WorldVoxilizedSectionMipper {
                }
             }
 
+            resolveSurfaceCarriers(data, 4608, 4);
+
             i = 0;
 
             for (int y = 0; y < 4; y += 2) {
@@ -79,6 +104,8 @@ public class WorldVoxilizedSectionMipper {
                   }
                }
             }
+
+            resolveSurfaceCarriers(data, 4672, 2);
 
             data[4680] = Mipper.mip(
                data[J(0, 0, 0)],

@@ -26,28 +26,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
-//Feeds the client the parent-world light under each tracked ship. Sable lights a distant hull from a
-//single sky-light scalar sampled out of the parent chunks (MixinClientSubLevelFinalizeLighting); the
-//chunks under a far ship sit outside every player's tracking view, so vanilla never sends them and
-//the hull would render black.
-//
-//Send discipline, per (player, ship) pair, per chunk: a chunk the player's tracking view owns is
-//vanilla's business and counts as never-sent here (leaving the view triggers ForgetLevelChunk, which
-//drops the client's chunk AND its light). Inside the client's storage ring a full chunk-with-light
-//packet sticks; outside it vanilla discards the chunk body on arrival and keeps only the light
-//layers - which are also all the sky-light scalar can use out there - so those chunks get a light
-//packet and nothing else. Each chunk is sent once; re-sends happen only when the chunk's own blocks
-//or light actually changed (the ChunkHolder hook feeding markDirty), batched on a slow,
-//per-key-staggered cadence. The scalar consumer samples five points; that cadence is far below
-//perception.
 public final class SableParentChunkLightSync {
     private static final long REFRESH_INTERVAL_TICKS = 300L;
     private static final int PARENT_CHUNK_PADDING = 1;
 
-    //Keyed on the ServerPlayer INSTANCE, not its UUID: respawn creates a new ServerPlayer while the
-    //UUID survives, and the respawned client just wiped its level - instance identity makes the stale
-    //key fall out of the activeKeys sweep on its own, and the new instance full-sends from scratch.
-    //Entity does not override equals(), so the record's Objects.equals is identity.
     private record TrackingKey(ServerPlayer player, UUID subLevelId) {}
 
     private static final class TrackingState {
@@ -69,9 +51,6 @@ public final class SableParentChunkLightSync {
     private SableParentChunkLightSync() {
     }
 
-    //Called from the ChunkHolder block/light change hooks, server thread. Those fire for every loaded
-    //chunk in the level, so the first two gates are what keep ordinary play untaxed: one static read,
-    //then membership in the sable ticket footprint - the only chunks this class ever sends.
     public static void markDirty(ServerLevel level, ChunkPos pos) {
         if (unavailable) {
             return;
@@ -171,9 +150,6 @@ public final class SableParentChunkLightSync {
         }
     }
 
-    //Walk the footprint every tick, but send only transitions: a chunk new to the footprint (ship
-    //moved), newly outside the tracking view (player walked away, the client forgot it), or newly
-    //outside the storage ring. Steady state sends nothing and costs the containment tests alone.
     private static void syncFootprint(ServerLevel level, ServerPlayer player, TrackingState state,
                                       BoundingBox3dc bounds, Vector3dc position) {
         ChunkTrackingView trackingView = player.getChunkTrackingView();
@@ -242,9 +218,6 @@ public final class SableParentChunkLightSync {
         }
     }
 
-    //Re-send only what changed since this key's last refresh, and only as light: nothing client-side
-    //reads the block copy after the first send except the chunk-presence gate, which that send
-    //already satisfied. Blocks in the storage annulus go stale; the sky-light scalar does not.
     private static void refreshDirty(ServerLevel level, ServerPlayer player, TrackingState state,
                                      Long2LongOpenHashMap dirty) {
         if (dirty == null || dirty.isEmpty()) {

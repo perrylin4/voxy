@@ -12,15 +12,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//Twin of MixinContraptionEntityRenderer for the one subclass that draws after super.render:
-//CarriageContraptionEntityRenderer.render calls super.render (which MixinContraptionEntityRenderer
-//HEAD-cancels) and then, when Flywheel visualization is unsupported (backend OFF), draws the bogeys
-//itself. Cancelling the super method only returns to this subclass, whose post-super bogey draw then
-//runs - so with the Flywheel backend off (a plain-Create possibility: user command or a GPU without
-//instancing) the wheels float over voxy LOD with no carriage body. Backend ON this path is
-//supportsVisualization-gated off and bogeys are hidden by MixinCarriageContraptionVisual, so this
-//HEAD-cancel is a no-op there beyond preempting the base mixin (identical net effect). Same anchor
-//and threshold as every other train cull, so body + bogeys vanish together.
 @Mixin(CarriageContraptionEntityRenderer.class)
 public class MixinCarriageContraptionEntityRenderer {
     @Inject(
@@ -41,7 +32,7 @@ public class MixinCarriageContraptionEntityRenderer {
         }
         Vec3 cam = mc.gameRenderer.getMainCamera().getPosition();
         //Same handover boundary as the distant train mesh - see TrainHandover
-        if (me.cortex.voxy.client.compat.create.TrainHandover.beyondLive(entity.position(), cam)) {
+        if (me.cortex.voxy.client.compat.create.TrainHandover.shouldCullLive(entity, cam)) {
             ci.cancel();
         }
     }

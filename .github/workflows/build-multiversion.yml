@@ -18,11 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - edition: integrations-1.21.1
-            label: 1.21.1 NeoForge integrations
-            java: '21'
-          - edition: client-1.21.1
-            label: 1.21.1 NeoForge client
+          - edition: neoforge-1.21.1
+            label: 1.21.1 NeoForge
             java: '21'
           - edition: client-1.20.1
             label: 1.20.1 Forge client
@@ -82,18 +79,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Restore 1.21.1 integrations release
+      - name: Restore 1.21.1 release
         uses: actions/cache/restore@v5
         with:
-          path: stage/integrations-1.21.1
-          key: multiversion-${{ github.run_id }}-${{ github.run_attempt }}-integrations-1.21.1
-          fail-on-cache-miss: true
-
-      - name: Restore 1.21.1 client release
-        uses: actions/cache/restore@v5
-        with:
-          path: stage/client-1.21.1
-          key: multiversion-${{ github.run_id }}-${{ github.run_attempt }}-client-1.21.1
+          path: stage/neoforge-1.21.1
+          key: multiversion-${{ github.run_id }}-${{ github.run_attempt }}-neoforge-1.21.1
           fail-on-cache-miss: true
 
       - name: Restore 1.20.1 client release
@@ -116,8 +106,8 @@ jobs:
           set -euo pipefail
           mkdir -p release
           mapfile -t jars < <(find stage -type f -name '*.jar' -print | sort)
-          if (( ${#jars[@]} != 4 )); then
-            printf 'Expected 4 release JARs, found %d:\n' "${#jars[@]}" >&2
+          if (( ${#jars[@]} != 3 )); then
+            printf 'Expected 3 release JARs, found %d:\n' "${#jars[@]}" >&2
             printf '  %s\n' "${jars[@]}" >&2
             exit 1
           fi

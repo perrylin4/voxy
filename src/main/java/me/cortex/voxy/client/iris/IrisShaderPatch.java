@@ -26,7 +26,7 @@ import static org.lwjgl.opengl.GL33.*;
 
 public class IrisShaderPatch {
     public static final int VERSION = ((IntSupplier)()->1).getAsInt();
-    public static final int SHADER_DEFINE_VERSION = 2;
+    public static final int SHADER_DEFINE_VERSION = 3;
     private static final int LITE_CONTRACT_VERSION = 1;
     private static final Pattern LITE_CONTRACT = Pattern.compile(
             "VOXY_LITE_CONTRACT\\s+api=(\\d+);pack=([^;\\r\\n]+);versions=([^;\\r\\n]+);transition=([a-z0-9_-]+)");
@@ -205,6 +205,7 @@ public class IrisShaderPatch {
         public float[] renderScale;
         public boolean useViewportDims;
         public boolean skipShaderDepthHackFix;
+        public boolean useDynamicFarPlane;
         public String checkValid() {
             if (this.blending != null) {
                 int i = 0;
@@ -256,6 +257,7 @@ public class IrisShaderPatch {
     }
 
     public boolean skipShaderDepthHackFix() { return this.patchData.skipShaderDepthHackFix; }
+    public boolean useDynamicFarPlane() { return this.patchData.useDynamicFarPlane; }
     public Int2ObjectMap<String> getSSBOs() {
         return new Int2ObjectLinkedOpenHashMap<>(this.ssbos);
     }

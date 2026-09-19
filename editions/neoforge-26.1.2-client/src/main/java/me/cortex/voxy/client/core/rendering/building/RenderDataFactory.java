@@ -27,6 +27,7 @@ public class RenderDataFactory {
    private final int[] opaqueMasks = new int[1024];
    private final int[] nonOpaqueMasks = new int[1024];
    private final int[] fluidMasks = new int[1024];
+   private final short[] biomeIds = new short[32768];
    private final MemoryBuffer quadBuffer = new MemoryBuffer(4194304L);
    private final long quadBufferPtr = this.quadBuffer.address;
    private final int[] quadCounters = new int[8];
@@ -41,6 +42,152 @@ public class RenderDataFactory {
    private final RenderDataFactory.Mesher blockMesher = new RenderDataFactory.Mesher();
    private final RenderDataFactory.Mesher seondaryblockMesher = new RenderDataFactory.Mesher();
    private static final long LM = 9187343239835811840L;
+    private int fluidModelId(int voxelIndex) {
+        long quad = this.sectionData[voxelIndex * 2];
+        long metadata = this.sectionData[voxelIndex * 2 + 1];
+        int modelId = (int) ((quad >>> 26) & 0xFFFF);
+        return ModelQueries.containsFluid(metadata)
+                ? this.modelMan.getFluidClientStateId(modelId)
+                : modelId;
+    }
+
+    private int fluidKind(int voxelIndex) {
+        if (!hasFluid(voxelIndex)) return 0;
+        return this.modelMan.getVanillaFluidKind(fluidModelId(voxelIndex));
+    }
+
+    private int rawFluidModelId(long raw) {
+        if (Mapper.isAir(raw)) return 0;
+        int modelId = this.modelMan.getModelId(Mapper.getBlockId(raw));
+        long metadata = this.modelMan.getModelMetadataFromClientId(modelId);
+        return ModelQueries.containsFluid(metadata)
+                ? this.modelMan.getFluidClientStateId(modelId)
+                : ModelQueries.isFluid(metadata) ? modelId : 0;
+    }
+
+    private int rawFluidKind(long raw) {
+        int modelId = rawFluidModelId(raw);
+        return modelId == 0 ? 0 : this.modelMan.getVanillaFluidKind(modelId);
+    }
+
+    private long rawModelMetadata(long raw) {
+        if (Mapper.isAir(raw)) return 0;
+        int modelId = this.modelMan.getModelId(Mapper.getBlockId(raw));
+        return this.modelMan.getModelMetadataFromClientId(modelId);
+    }
+
+    private int rawFluidHeight(long raw) {
+        int modelId = rawFluidModelId(raw);
+        return modelId == 0 ? 0 : ModelQueries.fluidHeight(
+                this.modelMan.getModelMetadataFromClientId(modelId));
+    }
+
+    private long horizontalNeighborRaw(int x, int y, int z) {
+        if (x == -1 && z >= 0 && z < 32) return this.neighboringFaces[z + y * 32];
+        if (x == 32 && z >= 0 && z < 32) return this.neighboringFaces[32 * 32 + z + y * 32];
+        if (z == -1 && x >= 0 && x < 32) return this.neighboringFaces[4 * 32 * 32 + x + y * 32];
+        if (z == 32 && x >= 0 && x < 32) return this.neighboringFaces[5 * 32 * 32 + x + y * 32];
+        return 0;
+    }
+
+    private int effectiveRawFluidHeight(long raw, int x, int y, int z, int kind) {
+        int height = rawFluidHeight(raw);
+        if (kind == 0 || y == 31) return height;
+        return rawFluidKind(horizontalNeighborRaw(x, y + 1, z)) == kind ? 9 : height;
+    }
+
+    private int fluidDescriptor(int voxelIndex) {
+        int modelId = fluidModelId(voxelIndex);
+        long metadata = this.modelMan.getModelMetadataFromClientId(modelId);
+        return (ModelQueries.isBiomeColoured(metadata) ? 1 << 5 : 0) | ModelQueries.fluidHeight(metadata);
+    }
+
+    private int effectiveFluidHeight(int voxelIndex) {
+        int height = fluidDescriptor(voxelIndex) & 31;
+        int y = voxelIndex >>> 10;
+        int kind = fluidKind(voxelIndex);
+        if (kind != 0 && y < 31 && fluidKind(voxelIndex + 1024) == kind) return 9;
+        if (kind != 0 && y == 31) {
+            int x = voxelIndex & 31;
+            int z = (voxelIndex >>> 5) & 31;
+            if (rawFluidKind(this.neighboringFaces[3 * 32 * 32 + x + z * 32]) == kind) return 9;
+        }
+        return height;
+    }
+
+    private float fluidCornerHeight(int voxelIndex, int cornerX, int cornerZ) {
+        int kind = fluidKind(voxelIndex);
+        if (kind == 0) return effectiveFluidHeight(voxelIndex);
+        int x = voxelIndex & 31;
+        int z = (voxelIndex >>> 5) & 31;
+        int y = voxelIndex >>> 10;
+        float weightedHeight = 0.0f;
+        float weight = 0.0f;
+        for (int dz = cornerZ - 1; dz <= cornerZ; dz++) {
+            for (int dx = cornerX - 1; dx <= cornerX; dx++) {
+                int sx = x + dx;
+                int sz = z + dz;
+                float sampleHeight;
+                if (sx >= 0 && sx < 32 && sz >= 0 && sz < 32) {
+                    int sample = sx | (sz << 5) | (y << 10);
+                    if (fluidKind(sample) == kind) {
+                        sampleHeight = effectiveFluidHeight(sample);
+                    } else {
+                        sampleHeight = ModelQueries.isFullyOpaque(this.sectionData[sample * 2 + 1]) ? -1.0f : 0.0f;
+                    }
+                } else {
+                    long raw = horizontalNeighborRaw(sx, y, sz);
+                    if (rawFluidKind(raw) == kind) {
+                        sampleHeight = effectiveRawFluidHeight(raw, sx, y, sz, kind);
+                    } else {
+                        sampleHeight = ModelQueries.isFullyOpaque(rawModelMetadata(raw)) ? -1.0f : 0.0f;
+                    }
+                }
+                if (sampleHeight >= 9.0f) return 9.0f;
+                if (sampleHeight >= 0.0f) {
+                    float sampleWeight = sampleHeight >= 7.2f ? 10.0f : 1.0f;
+                    weightedHeight += sampleHeight * sampleWeight;
+                    weight += sampleWeight;
+                }
+            }
+        }
+        return weight > 0.0f ? weightedHeight / weight : effectiveFluidHeight(voxelIndex);
+    }
+
+    private static int encodeFluidCornerHeight(float height) {
+        if (height <= 0.01f) return 0;
+        if (height >= 8.5f) return 7;
+        if (height >= 6.5f) return 6;
+        return Math.clamp(Math.round(height) - 1, 1, 5);
+    }
+
+    private static int packFluidCorners(float c0, float c1, float c2, float c3) {
+        return encodeFluidCornerHeight(c0)
+                | (encodeFluidCornerHeight(c1) << 3)
+                | (encodeFluidCornerHeight(c2) << 6)
+                | (encodeFluidCornerHeight(c3) << 9);
+    }
+
+    private long encodeFluidStep(long quad, int lowerHeight, int voxelIndex) {
+        if (lowerHeight <= 0) return quad;
+        quad &= ~((0xFL << 42) | (0x1FFL << 46) | (1L << 63));
+        quad |= ((long) lowerHeight) << 42;
+        quad |= ((long) this.biomeIds[voxelIndex] & 0x1FFL) << 46;
+        return quad;
+    }
+
+    private long encodeFluidShape(long quad, int payload, int voxelIndex) {
+        quad &= ~((0xFL << 42) | (0x1FFL << 46) | (1L << 63));
+        quad |= ((long) ((payload >>> 8) & 0xF)) << 42;
+        quad |= ((long) this.biomeIds[voxelIndex] & 0x1FFL) << 46;
+        return quad;
+    }
+
+    private static long maxQuadLight(long a, long b) {
+        final long SKYMSK = 0xFL << 55;
+        final long BLKMSK = 0xFL << 59;
+        return Math.max(a & SKYMSK, b & SKYMSK) | Math.max(a & BLKMSK, b & BLKMSK);
+    }
    private final RenderDataFactory.Mesher[] xAxisMeshers = new RenderDataFactory.Mesher[32];
    private final RenderDataFactory.Mesher[] secondaryXAxisMeshers = new RenderDataFactory.Mesher[32];
    private static final long X_I_MSK = 1162219258676257L;
@@ -149,6 +296,7 @@ public class RenderDataFactory {
       for (int q = 0; q < 512; q++) {
          for (int j = 0; j < 64; j++) {
             long block = rawSectionData[i];
+            this.biomeIds[i] = (short)Mapper.getBiomeId(block);
             if (Mapper.isAir(block)) {
                sectionData[i * 2] = (block & -72057594037927936L) >>> 1;
                sectionData[i * 2 + 1] = 0L;
@@ -474,6 +622,11 @@ public class RenderDataFactory {
                         A |= getQuadTyping(Am);
                      }
 
+                     if (axis == 0 && facingForward == 1 && this.modelMan.getVanillaFluidKind((int)(A >>> 26 & 65535L)) != 0) {
+                        this.blockMesher.skip(1);
+                        continue;
+                     }
+
                      long lighter = this.sectionData[bi];
                      this.blockMesher.putNext(applyQuadLight(facingForward | A & -9187343239835811841L | lighter & 9187343239835811840L, Am));
                   }
@@ -527,6 +680,12 @@ public class RenderDataFactory {
                      Am = this.modelMan.getModelMetadataFromClientId(fluidId);
                      A &= -7L;
                      A |= getQuadTyping(Am);
+                  }
+
+                  if (((axis == 0 && side == 1) || axis == 1)
+                     && this.modelMan.getVanillaFluidKind((int)(A >>> 26 & 65535L)) != 0) {
+                     this.blockMesher.skip(1);
+                     continue;
                   }
 
                   if (Mapper.getBlockId(neighborId) != 0) {
@@ -701,8 +860,6 @@ public class RenderDataFactory {
          this.blockMesher.axis = axis;
          this.generateYZOpaqueInnerGeometry(axis);
          this.generateYZOpaqueOuterGeometry(axis);
-         this.generateYZFluidInnerGeometry(axis);
-         this.generateYZFluidOuterGeometry(axis);
          this.generateYZNonOpaqueInnerGeometry(axis);
          this.generateYZNonOpaqueOuterGeometry(axis);
       }
@@ -1013,6 +1170,9 @@ public class RenderDataFactory {
                   A &= -7L;
                   A |= getQuadTyping(Am);
                }
+               if (this.modelMan.getVanillaFluidKind((int)(A >>> 26 & 65535L)) != 0) {
+                  oki = false;
+               }
 
                if (Mapper.getBlockId(neighborId) != 0) {
                   int modelId = this.modelMan.getModelId(Mapper.getBlockId(neighborId));
@@ -1059,6 +1219,9 @@ public class RenderDataFactory {
                   Ax |= Integer.toUnsignedLong(fluidId) << 26;
                   Amx = this.modelMan.getModelMetadataFromClientId(fluidId);
                }
+               if (this.modelMan.getVanillaFluidKind((int)(Ax >>> 26 & 65535L)) != 0) {
+                  okix = false;
+               }
 
                if (Mapper.getBlockId(neighborIdx) != 0) {
                   int modelIdx = this.modelMan.getModelId(Mapper.getBlockId(neighborIdx));
@@ -1102,6 +1265,275 @@ public class RenderDataFactory {
       ma.doAuxiliaryFaceOffset = true;
       mb.doAuxiliaryFaceOffset = true;
    }
+
+    private boolean hasFluid(int voxelIndex) {
+        long metadata = this.sectionData[voxelIndex * 2 + 1];
+        return ModelQueries.isFluid(metadata) || ModelQueries.containsFluid(metadata);
+    }
+
+    private long makeDirectFluidFace(int fluidIndex, int neighborIndex, int facingForward, int lowerHeight, int shapePayload) {
+        long quad = this.sectionData[fluidIndex * 2];
+        long metadata = this.sectionData[fluidIndex * 2 + 1];
+        if (ModelQueries.containsFluid(metadata)) {
+            int modelId = (int) ((quad >>> 26) & 0xFFFF);
+            int fluidId = this.modelMan.getFluidClientStateId(modelId);
+            quad = (quad & ~(0xFFFFL << 26)) | (Integer.toUnsignedLong(fluidId) << 26);
+            metadata = this.modelMan.getModelMetadataFromClientId(fluidId);
+            quad = (quad & ~0b110L) | getQuadTyping(metadata);
+        }
+
+        long neighborQuad = this.sectionData[neighborIndex * 2];
+        quad = shapePayload >= 0
+                ? encodeFluidShape(quad, shapePayload, fluidIndex)
+                : encodeFluidStep(quad, lowerHeight, fluidIndex);
+        return applyQuadLight(
+                facingForward | (quad & ~LM) | maxQuadLight(quad, neighborQuad),
+                metadata);
+    }
+
+    private long makeDirectFluidTop(int fluidIndex, long neighborRaw, int shapePayload) {
+        long quad = this.sectionData[fluidIndex * 2];
+        long metadata = this.sectionData[fluidIndex * 2 + 1];
+        if (ModelQueries.containsFluid(metadata)) {
+            int fluidId = this.modelMan.getFluidClientStateId((int) ((quad >>> 26) & 0xFFFF));
+            quad = (quad & ~(0xFFFFL << 26)) | (Integer.toUnsignedLong(fluidId) << 26);
+            metadata = this.modelMan.getModelMetadataFromClientId(fluidId);
+            quad = (quad & ~0b110L) | getQuadTyping(metadata);
+        }
+        quad = encodeFluidShape(quad, shapePayload, fluidIndex);
+        long neighborLight = (neighborRaw & (0xFFL << 56)) >>> 1;
+        return applyQuadLight(1L | (quad & ~LM) | maxQuadLight(quad, neighborLight), metadata);
+    }
+
+    private long makeDirectOuterFluidFace(int fluidIndex, long neighborRaw, int facingForward, int shapePayload) {
+        long quad = this.sectionData[fluidIndex * 2];
+        long metadata = this.sectionData[fluidIndex * 2 + 1];
+        if (ModelQueries.containsFluid(metadata)) {
+            int fluidId = this.modelMan.getFluidClientStateId((int) ((quad >>> 26) & 0xFFFF));
+            quad = (quad & ~(0xFFFFL << 26)) | (Integer.toUnsignedLong(fluidId) << 26);
+            metadata = this.modelMan.getModelMetadataFromClientId(fluidId);
+            quad = (quad & ~0b110L) | getQuadTyping(metadata);
+        }
+        quad = encodeFluidShape(quad, shapePayload, fluidIndex);
+        long neighborLight = (neighborRaw & (0xFFL << 56)) >>> 1;
+        return applyQuadLight(facingForward | (quad & ~LM) | maxQuadLight(quad, neighborLight), metadata);
+    }
+
+    private int fluidSidePayload(int fluidIndex, int neighborIndex, int axis, int facingForward) {
+        int kind = fluidKind(fluidIndex);
+        if (kind == 0) return -1;
+
+        float top0;
+        float top1;
+        float bottom0 = 0.0f;
+        float bottom1 = 0.0f;
+        if (axis == 2) {
+            int edge = facingForward == 1 ? 1 : 0;
+            top0 = fluidCornerHeight(fluidIndex, edge, 0);
+            top1 = fluidCornerHeight(fluidIndex, edge, 1);
+            if (fluidKind(neighborIndex) == kind) {
+                int neighborEdge = 1 - edge;
+                bottom0 = fluidCornerHeight(neighborIndex, neighborEdge, 0);
+                bottom1 = fluidCornerHeight(neighborIndex, neighborEdge, 1);
+            }
+            return packFluidCorners(bottom0, bottom1, top0, top1);
+        }
+
+        int edge = facingForward == 1 ? 1 : 0;
+        top0 = fluidCornerHeight(fluidIndex, 0, edge);
+        top1 = fluidCornerHeight(fluidIndex, 1, edge);
+        if (fluidKind(neighborIndex) == kind) {
+            int neighborEdge = 1 - edge;
+            bottom0 = fluidCornerHeight(neighborIndex, 0, neighborEdge);
+            bottom1 = fluidCornerHeight(neighborIndex, 1, neighborEdge);
+        }
+        return packFluidCorners(bottom0, top0, bottom1, top1);
+    }
+
+    private int outerFluidSidePayload(int fluidIndex, int axis, int facingForward) {
+        if (axis == 2) {
+            int edge = facingForward == 1 ? 1 : 0;
+            return packFluidCorners(0.0f, 0.0f,
+                    fluidCornerHeight(fluidIndex, edge, 0),
+                    fluidCornerHeight(fluidIndex, edge, 1));
+        }
+        int edge = facingForward == 1 ? 1 : 0;
+        return packFluidCorners(0.0f,
+                fluidCornerHeight(fluidIndex, 0, edge),
+                0.0f,
+                fluidCornerHeight(fluidIndex, 1, edge));
+    }
+
+    private void emitDirectOuterFluidBoundary(int fluidIndex, long neighborRaw, int axis,
+                                               int plane, int firstCoord, int secondCoord,
+                                               int facingForward) {
+        int kind = fluidKind(fluidIndex);
+        if (kind == 0 || rawFluidKind(neighborRaw) == kind) return;
+        if (CHECK_NEIGHBOR_FACE_OCCLUSION
+                && ModelQueries.faceOccludes(rawModelMetadata(neighborRaw),
+                (axis << 1) | (1 - facingForward))) {
+            return;
+        }
+
+        int payload = outerFluidSidePayload(fluidIndex, axis, facingForward);
+        long quad = makeDirectOuterFluidFace(fluidIndex, neighborRaw, facingForward, payload);
+        this.blockMesher.axis = axis;
+        this.blockMesher.auxiliaryPosition = plane;
+        this.blockMesher.doAuxiliaryFaceOffset = true;
+        this.blockMesher.emitShapedFluidQuad(firstCoord, secondCoord, payload, quad);
+    }
+
+    private void emitDirectFluidBoundary(int firstIndex, int secondIndex, int axis, int plane, int firstCoord, int secondCoord) {
+        boolean firstFluid = hasFluid(firstIndex);
+        boolean secondFluid = hasFluid(secondIndex);
+        if (!firstFluid && !secondFluid) return;
+
+        int fluidIndex;
+        int neighborIndex;
+        int facingForward;
+        int lowerHeight = 0;
+        int shapePayload;
+
+        if (firstFluid && secondFluid) {
+            int firstDescriptor = fluidDescriptor(firstIndex);
+            int secondDescriptor = fluidDescriptor(secondIndex);
+            int firstKind = fluidKind(firstIndex);
+            int secondKind = fluidKind(secondIndex);
+            int firstHeight = firstKind != 0 ? effectiveFluidHeight(firstIndex) : firstDescriptor & 31;
+            int secondHeight = secondKind != 0 ? effectiveFluidHeight(secondIndex) : secondDescriptor & 31;
+            if (firstKind != 0 && firstKind == secondKind) return;
+            if (firstKind == 0 && firstDescriptor == secondDescriptor) return;
+
+            if ((firstKind != 0 && firstKind == secondKind)
+                    || (firstKind == 0 && secondKind == 0
+                    && (firstDescriptor & (1 << 5)) == (secondDescriptor & (1 << 5)))) {
+                if (firstHeight == secondHeight) return;
+                boolean firstHigher = firstHeight > secondHeight;
+                fluidIndex = firstHigher ? firstIndex : secondIndex;
+                neighborIndex = firstHigher ? secondIndex : firstIndex;
+                facingForward = firstHigher ? 1 : 0;
+                lowerHeight = Math.min(firstHeight, secondHeight);
+            } else {
+                fluidIndex = firstIndex;
+                neighborIndex = secondIndex;
+                facingForward = 1;
+            }
+        } else {
+            boolean firstIsFluid = firstFluid;
+            fluidIndex = firstIsFluid ? firstIndex : secondIndex;
+            neighborIndex = firstIsFluid ? secondIndex : firstIndex;
+            facingForward = firstIsFluid ? 1 : 0;
+
+            long neighborMetadata = this.sectionData[neighborIndex * 2 + 1];
+            if (CHECK_NEIGHBOR_FACE_OCCLUSION
+                    && ModelQueries.faceOccludes(neighborMetadata, (axis << 1) | (1 - facingForward))) {
+                return;
+            }
+        }
+
+        this.blockMesher.axis = axis;
+        this.blockMesher.auxiliaryPosition = plane;
+        this.blockMesher.doAuxiliaryFaceOffset = true;
+        shapePayload = fluidSidePayload(fluidIndex, neighborIndex, axis, facingForward);
+        long quad = makeDirectFluidFace(fluidIndex, neighborIndex, facingForward, lowerHeight, shapePayload);
+        if (shapePayload >= 0) {
+            this.blockMesher.emitShapedFluidQuad(firstCoord, secondCoord, shapePayload, quad);
+        } else {
+            this.blockMesher.emitQuad(firstCoord, secondCoord, 1, 1, quad);
+        }
+    }
+
+    private void generateDirectHorizontalFluidGeometry() {
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                for (int x = 0; x < 32; x++) {
+                    int index = x | (z << 5) | (y << 10);
+                    if (x < 31) {
+                        emitDirectFluidBoundary(index, index + 1, 2, x, z, y);
+                    }
+                    if (z < 31) {
+                        emitDirectFluidBoundary(index, index + 32, 1, z, x, y);
+                    }
+                }
+            }
+        }
+    }
+
+    private void generateDirectOuterHorizontalFluidGeometry(int unavailableNeighborMsk) {
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                int sliceIndex = z + y * 32;
+                if ((unavailableNeighborMsk & 1) == 0) {
+                    int index = (z << 5) | (y << 10);
+                    if (fluidKind(index) != 0) {
+                        emitDirectOuterFluidBoundary(index, this.neighboringFaces[sliceIndex],
+                                2, -1, z, y, 0);
+                    }
+                }
+                if ((unavailableNeighborMsk & 2) == 0) {
+                    int index = 31 | (z << 5) | (y << 10);
+                    if (fluidKind(index) != 0) {
+                        emitDirectOuterFluidBoundary(index, this.neighboringFaces[32 * 32 + sliceIndex],
+                                2, 31, z, y, 1);
+                    }
+                }
+            }
+            for (int x = 0; x < 32; x++) {
+                int sliceIndex = x + y * 32;
+                if ((unavailableNeighborMsk & 16) == 0) {
+                    int index = x | (y << 10);
+                    if (fluidKind(index) != 0) {
+                        emitDirectOuterFluidBoundary(index, this.neighboringFaces[4 * 32 * 32 + sliceIndex],
+                                1, -1, x, y, 0);
+                    }
+                }
+                if ((unavailableNeighborMsk & 32) == 0) {
+                    int index = x | (31 << 5) | (y << 10);
+                    if (fluidKind(index) != 0) {
+                        emitDirectOuterFluidBoundary(index, this.neighboringFaces[5 * 32 * 32 + sliceIndex],
+                                1, 31, x, y, 1);
+                    }
+                }
+            }
+        }
+    }
+
+    private void generateDirectFluidTops() {
+        this.blockMesher.axis = 0;
+        this.blockMesher.doAuxiliaryFaceOffset = true;
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                for (int x = 0; x < 32; x++) {
+                    int index = x | (z << 5) | (y << 10);
+                    int kind = fluidKind(index);
+                    if (kind == 0) continue;
+
+                    int above = y < 31 ? index + 1024 : -1;
+                    long aboveRaw = y == 31
+                            ? this.neighboringFaces[3 * 32 * 32 + x + z * 32]
+                            : 0;
+                    int aboveKind = above >= 0 ? fluidKind(above) : rawFluidKind(aboveRaw);
+                    if (aboveKind == kind) continue;
+
+                    long aboveMetadata = above >= 0
+                            ? this.sectionData[above * 2 + 1]
+                            : rawModelMetadata(aboveRaw);
+                    if (CHECK_NEIGHBOR_FACE_OCCLUSION && ModelQueries.faceOccludes(aboveMetadata, 0)) continue;
+
+                    int payload = packFluidCorners(
+                            fluidCornerHeight(index, 0, 0),
+                            fluidCornerHeight(index, 0, 1),
+                            fluidCornerHeight(index, 1, 0),
+                            fluidCornerHeight(index, 1, 1));
+                    long quad = above >= 0
+                            ? makeDirectFluidFace(index, above, 1, 0, payload)
+                            : makeDirectFluidTop(index, aboveRaw, payload);
+                    this.blockMesher.auxiliaryPosition = y;
+                    this.blockMesher.emitShapedFluidQuad(x, z, payload, quad);
+                }
+            }
+        }
+    }
 
    private void generateXNonOpaqueInnerGeometry() {
       for (int y = 0; y < 32; y++) {
@@ -1297,13 +1729,6 @@ public class RenderDataFactory {
          mesher.finish();
       }
 
-      this.generateXInnerFluidGeometry();
-      this.generateXOuterFluidGeometry();
-
-      for (RenderDataFactory.Mesher mesher : this.xAxisMeshers) {
-         mesher.finish();
-      }
-
       this.generateXNonOpaqueInnerGeometry();
       this.generateXNonOpaqueOuterGeometry();
 
@@ -1314,6 +1739,22 @@ public class RenderDataFactory {
       for (RenderDataFactory.Mesher mesher : this.secondaryXAxisMeshers) {
          mesher.finish();
       }
+   }
+
+   private void generateFluidFaces() {
+      this.generateDirectHorizontalFluidGeometry();
+      this.blockMesher.axis = 1;
+      this.generateYZFluidOuterGeometry(1);
+
+      for (RenderDataFactory.Mesher mesher : this.xAxisMeshers) mesher.finish();
+      this.generateXOuterFluidGeometry();
+      for (RenderDataFactory.Mesher mesher : this.xAxisMeshers) mesher.finish();
+      this.generateDirectOuterHorizontalFluidGeometry(0);
+
+      this.blockMesher.axis = 0;
+      this.generateYZFluidInnerGeometry(0);
+      this.generateYZFluidOuterGeometry(0);
+      this.generateDirectFluidTops();
    }
 
    private final int occupancyBarrier(int index) {
@@ -1397,6 +1838,7 @@ public class RenderDataFactory {
             this.applyBiomeBlend(section._unsafeGetRawDataArray(), neighborMsk);
             this.generateYZFaces();
             this.generateXFaces();
+            this.generateFluidFaces();
          } catch (IdNotYetComputedException var12) {
             var12.auxBitMsk = neighborMsk;
             var12.auxData = this.neighboringFaces;
@@ -1467,6 +1909,14 @@ public class RenderDataFactory {
 
       @Override
       protected void emitQuad(int x, int z, int length, int width, long data) {
+         this.emitQuad(x, z, length, width, data, -1);
+      }
+
+      private void emitShapedFluidQuad(int x, int z, int payload, long data) {
+         this.emitQuad(x, z, 1, 1, data, payload & 255);
+      }
+
+      private void emitQuad(int x, int z, int length, int width, long data, int encodedSizeBits) {
          if (RenderDataFactory.VERIFY_MESHING) {
             if (length < 1 || length > 16) {
                throw new IllegalStateException("length out of bounds: " + length);
@@ -1515,7 +1965,9 @@ public class RenderDataFactory {
             } else {
                int axis = this.axis;
                int face = axis << 1 | axisSide;
-               int encodedPosition = face | width - 1 << 7 | length - 1 << 3;
+               int encodedPosition = face | (encodedSizeBits >= 0
+                  ? encodedSizeBits << 3
+                  : width - 1 << 7 | length - 1 << 3);
                encodedPosition |= x << (axis == 2 ? 16 : 21);
                encodedPosition |= z << (axis == 1 ? 16 : 11);
                int shiftAmount = axis == 0 ? 16 : (axis == 1 ? 11 : 21);

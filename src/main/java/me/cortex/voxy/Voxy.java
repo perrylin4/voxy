@@ -24,11 +24,6 @@ public class Voxy {
     private final me.cortex.voxy.compat.far.FarEntityService farEntityService = new me.cortex.voxy.compat.far.FarEntityService();
 
     public Voxy(IEventBus modEventBus, ModContainer container) {
-        //Terrain streaming is handled by the external VSS mod; on a dedicated server voxy only
-        //provides the sable contraption ticket hook (MixinServerLevel) and, with Create installed,
-        //the distant-train pose sampler. Everything else is client side.
-
-        modEventBus.addListener(Voxy::registerPayloads);
 
         //Far players / ridden vehicles: server samples player snapshots, client renders lightweight
         //proxies past the entity view distance
@@ -37,6 +32,7 @@ public class Voxy {
         NeoForge.EVENT_BUS.addListener(this.farEntityService::onPlayerLoggedOut);
 
         if (ModList.get().isLoaded("create")) {
+            modEventBus.addListener(Voxy::registerPayloads);
             //Server-side train sampling (works on the integrated server too). The sampler class is
             //the only place that touches Create classes, so it must stay behind this gate.
             NeoForge.EVENT_BUS.register(me.cortex.voxy.commonImpl.compat.create.CreateTrainSampler.INSTANCE);
@@ -59,29 +55,19 @@ public class Voxy {
             // Voxy's Sodium video-settings page is registered by VoxyConfigMenu (@ConfigEntryPointForge,
             // Sodium 0.8 native config API), not here.
 
-            // EclipticSeasons compat: rebuild the LOD renderer on season change. Gated on the mod being present
-            // so the snow-LOD code (which references EclipticSeasons client classes) never loads without it.
-            if (ModList.get().isLoaded("eclipticseasons")) {
+            if (me.cortex.voxy.client.core.compat.eclipticseasons.EsCompatGate.shouldArm()) {
                 NeoForge.EVENT_BUS.register(me.cortex.voxy.client.core.compat.eclipticseasons.VoxyEsHandler.INSTANCE);
             }
 
-            //Distant train rendering is Create-free on the client (poses + baked meshes arrive over
-            //our own payloads), so it registers unconditionally. Bogeys go through Create's own
-            //style renderers and need the mod present. Rendering hooks the tail of the LOD pipeline
-            //so LOD terrain depth occludes trains and tracks; the event bus only handles cleanup.
-            var trainRenderer = new me.cortex.voxy.client.compat.create.DistantTrainRenderer();
-            NeoForge.EVENT_BUS.register(trainRenderer);
-            me.cortex.voxy.client.compat.LodPipelineHooks.register(trainRenderer);
-            //Occlusion recorder behind /voxy debug trains occlusion (Create-free)
-            me.cortex.voxy.client.compat.LodPipelineHooks.frameDebugProbe =
-                    me.cortex.voxy.client.compat.create.DistantOcclusionDebug.PROBE;
             if (ModList.get().isLoaded("create")) {
+                var trainRenderer = new me.cortex.voxy.client.compat.create.DistantTrainRenderer();
+                NeoForge.EVENT_BUS.register(trainRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.register(trainRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.frameDebugProbe =
+                        me.cortex.voxy.client.compat.create.DistantOcclusionDebug.PROBE;
                 //Bogey snapshot capture touches Create's registries, so it stays behind this gate
                 me.cortex.voxy.client.compat.create.DistantTrainRenderer.bogeyMeshProvider =
                         me.cortex.voxy.client.compat.create.DistantBogeyMeshes::getOrCapture;
-                //Track LOD reads the client-synced TrackGraph directly, so it needs Create present.
-                //Create's bezier BEs are clamped to the view distance by MixinTrackRenderer so they
-                //hand their distant spans to this renderer instead of floating past the LOD.
                 var trackRenderer = new me.cortex.voxy.client.compat.create.DistantTrackRenderer();
                 NeoForge.EVENT_BUS.register(trackRenderer);
                 me.cortex.voxy.client.compat.LodPipelineHooks.register(trackRenderer);
@@ -99,6 +85,11 @@ public class Voxy {
                 NeoForge.EVENT_BUS.register(kineticRenderer);
                 me.cortex.voxy.client.compat.LodPipelineHooks.register(kineticRenderer);
 
+                var copycatRenderer = new me.cortex.voxy.client.compat.copycat.CopycatDistantRenderer();
+                NeoForge.EVENT_BUS.register(copycatRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.register(copycatRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.registerTranslucent(copycatRenderer);
+
                 //Ship-borne kinetics render natively (a ship is one connected drivetrain - copies
                 //cannot keep adjacent shafts in sync); the cull exempts them entirely.
             }
@@ -107,12 +98,25 @@ public class Voxy {
                 var littleTilesRenderer = new me.cortex.voxy.client.compat.littletiles.LittleTilesDistantRenderer();
                 NeoForge.EVENT_BUS.register(littleTilesRenderer);
                 me.cortex.voxy.client.compat.LodPipelineHooks.register(littleTilesRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.registerTranslucent(littleTilesRenderer);
             }
 
             if (ModList.get().isLoaded("domum_ornamentum")) {
                 var domumRenderer = new me.cortex.voxy.client.compat.domum.DomumDistantRenderer();
                 NeoForge.EVENT_BUS.register(domumRenderer);
                 me.cortex.voxy.client.compat.LodPipelineHooks.register(domumRenderer);
+            }
+
+            if (ModList.get().isLoaded("powergrid")) {
+                var wireRenderer = new me.cortex.voxy.client.compat.powergrid.PowerGridWireRenderer();
+                NeoForge.EVENT_BUS.register(wireRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.register(wireRenderer);
+            }
+
+            if (ModList.get().isLoaded("simulated")) {
+                var laserRenderer = new me.cortex.voxy.client.compat.simulated.DistantLaserRenderer();
+                NeoForge.EVENT_BUS.register(laserRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.registerTranslucent(laserRenderer);
             }
 
             //Beacon beams derived from the voxel store, so one shows up whether or not its chunk was

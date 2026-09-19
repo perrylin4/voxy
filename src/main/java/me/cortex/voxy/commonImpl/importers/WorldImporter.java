@@ -378,7 +378,6 @@ public class WorldImporter implements IDataImporter {
                 continue;
             }
 
-            //TODO: create memory copy for each section
             if (regionFile.size < ((sectorCount-1) + sectorStart) * 4096L) {
                 Logger.warn("Cannot access chunk sector as it goes out of bounds. start bytes: " + (sectorStart*4096) + " sector count: " + sectorCount + " fileSize: " + regionFile.size);
                 continue;
@@ -530,7 +529,6 @@ public class WorldImporter implements IDataImporter {
 
         var blockStatesRes = blockStateCodec.parse(NbtOps.INSTANCE, section.getCompound("block_states"));
         if (!blockStatesRes.hasResultOrPartial()) {
-            //TODO: if its only partial, it means should try to upgrade the nbt format with datafixerupper probably
             return;
         }
         var blockStates = blockStatesRes.getPartialOrThrow();

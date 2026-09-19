@@ -12,16 +12,6 @@ import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 
-//Create's track bezier is drawn by this Flywheel visual (GPU instances), not the vanilla BER - so
-//getViewDistance/renderSafe clamps never touch it, and under iris+colorwheel (Flywheel forced on)
-//it is the only draw path. The visual has no distance culling of its own: once the BE's chunk is
-//client-loaded it submits the whole span as instances, and EntityCulling (nowheel) only occlusion-
-//culls it - which fails over voxy LOD where there is no real block to occlude, leaving it floating.
-//
-//Make the visual a SimpleDynamicVisual so Flywheel calls beginFrame every frame (engine-agnostic:
-//both the default engine and colorwheel's ClrwlEngine honor DynamicVisual.planFrame), and drop the
-//instances beyond the effective render distance (3D spherical, honoring height), rebuilding them on
-//return - a view distance for the instanced path.
 @Mixin(TrackVisual.class)
 public abstract class MixinTrackVisual implements SimpleDynamicVisual {
     @Shadow @org.spongepowered.asm.mixin.Final protected BlockPos pos;

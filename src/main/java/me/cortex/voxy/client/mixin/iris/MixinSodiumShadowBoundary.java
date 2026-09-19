@@ -24,10 +24,6 @@ public abstract class MixinSodiumShadowBoundary {
     private void voxy$fadeShadowCasters(String passName,
                                         Map<PatchShaderType, String> transformed,
                                         CallbackInfoReturnable<Map<PatchShaderType, GlShader>> cir) {
-        // Do not rewrite terrain_cutout. A single Iris cutout pass contains leaves, grass and many
-        // modded models, so it cannot identify leaves without pack-specific attributes. Dithering
-        // that whole pass made canopies disappear before their atomic LOD handoff. Leaving cutout
-        // colour untouched is both cheaper and substantially safer for unknown shader packs.
         if (!passName.equals("shadow") && !passName.equals("shadow_cutout")) {
             return;
         }

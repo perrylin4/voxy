@@ -42,24 +42,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-//Server-side distant train sampler. Create keeps every carriage's positionAnchor/rotationAnchors
-//updated each tick even while the train is simulated (chunks unloaded, no entities), so this just
-//reads Create.RAILWAYS and streams poses to players between the entity tracking range and the
-//distant render radius. Carriage block shapes are pulled once from the serialized contraption NBT
-//and cached per (train, carriage). This is the only class in the project that touches Create.
-//
-//createthreadedtrains compat: that mod moves the whole RAILWAYS tick onto its "Train Worker"
-//thread, running concurrently with the server tick. When present, sampling is submitted to the
-//same worker queue so it runs serially after the train tick instead of racing it. State maps are
-//concurrent because logout/shutdown cleanup still arrives on the server thread.
 public final class CreateTrainSampler {
     public static final CreateTrainSampler INSTANCE = new CreateTrainSampler();
 
 
-    //Create's entity pipeline only covers carriages standing in chunks the client actually renders,
-    //i.e. within min(server view-distance, the client's requested view distance). Start streaming a
-    //couple of chunks inside that edge so the handover overlaps instead of gapping; 208 caps the
-    //floor because entity tracking ends at ~15 chunks no matter how far chunks render.
     private static double minSendDistance(MinecraftServer server, ServerPlayer player) {
         int effectiveViewChunks = Math.min(server.getPlayerList().getViewDistance(), player.requestedViewDistance());
         return Math.max(32, Math.min((effectiveViewChunks - 2) * 16, 208));
@@ -172,6 +158,7 @@ public final class CreateTrainSampler {
             }
         }
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (!player.connection.hasChannel(ContraptionPosesPayload.TYPE)) continue;
             var source = movingByDimension.get(player.level().dimension());
             if (source == null) {
                 continue;
@@ -259,10 +246,6 @@ public final class CreateTrainSampler {
         this.contraptionStates.clear();
     }
 
-    //Contraption.fromNBT deserialization per carriage is heavy; a long train entering the window
-    //would build every carriage's shape in one server tick. Cap builds per round and let the rest
-    //arrive over the next few ticks - the client streams poses regardless and renders each carriage
-    //the moment its shape lands, so a shape lagging a tick or two is invisible in practice.
     private static final int SHAPE_BUILDS_PER_ROUND = 8;
     private int shapeBuildsThisRound;
 
@@ -287,18 +270,12 @@ public final class CreateTrainSampler {
         var trains = new ArrayList<>(Create.RAILWAYS.trains.values());
         lastTrainsSeen = trains.size();
         int posePacketsSent = 0;
-        //Stream window ceiling = min(client render distance, dedicated-server ceiling), clamped to the
-        //hard max. On the integrated server it shrinks to what the host draws; on a dedicated server it
-        //is the voxy-server.toml ceiling. Streaming a band the client never draws is pure waste.
         double streamMax = DistantTrainConfig.maxDistance();
         double streamMaxSq = streamMax * streamMax;
-        //A carriage's world pose (anchor + yaw/pitch + bogey poses) depends only on (train, carriage,
-        //dimension), not on the observing player - but the anchors and buildBogeyPoses were recomputed
-        //once per PLAYER. Memoize the CarriagePose per (shapeId, dimension) for this sample round so N
-        //players watching the same train share one computation. CarriagePose is an immutable record, so
-        //handing the same instance to every player's packet is safe. Cleared implicitly each round.
         Map<PoseKey, CarriagePose> poseRoundCache = new java.util.HashMap<>();
         for (ServerPlayer player : players) {
+            if (!player.connection.hasChannel(CarriageShapePayload.TYPE)
+                    || !player.connection.hasChannel(TrainPosesPayload.TYPE)) continue;
             var playerDim = player.level().dimension();
             var playerPos = player.position();
             var nowVisible = new HashSet<UUID>();
@@ -373,7 +350,7 @@ public final class CreateTrainSampler {
     }
 
     private void sendRemovals(ServerPlayer player, Set<UUID> previous, Set<UUID> current) {
-        if (previous == null) {
+        if (previous == null || !player.connection.hasChannel(TrainPosesPayload.TYPE)) {
             return;
         }
         var shapesByTrain = this.sentShapes.get(player.getUUID());
@@ -452,10 +429,6 @@ public final class CreateTrainSampler {
         out.add(new ShapeBogey(style.id, size.id(), size.wheelRadius(), data));
     }
 
-    //World poses for the carriage's bogeys, computed the same way CarriageBogey.updateAngles does
-    //(that method only runs client side on real entities, so simulated trains need it re-derived
-    //from the travelling points). Returns an empty list unless every bogey is cleanly on the graph
-    //in the player's dimension - the client skips bogey rendering rather than guessing.
     private static List<BogeyPose> buildBogeyPoses(Train train, Carriage carriage, ResourceKey<Level> dim) {
         if (train.derailed || train.graph == null) {
             return List.of();

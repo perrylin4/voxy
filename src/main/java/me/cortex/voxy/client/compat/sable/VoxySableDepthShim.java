@@ -130,10 +130,6 @@ public final class VoxySableDepthShim {
      * @param ndcBounds screen extent the bracketed pass can touch, {minX, minY, maxX, maxY} in NDC.
      *                  Everything the shim does is confined to it - the blits and the pass itself.
      */
-    //The merge pass and both write-back shaders compare depths assuming smaller-is-nearer. A reverse-Z
-    //projection (m22 near zero, some shader packs use it for far-plane precision) flips that, and
-    //merging under it would push LOD behind everything instead of in front. Detect and sit the pass
-    //out - no merge just means ships draw the way they do without the shim.
     private static boolean isReverseZ(Matrix4f projection) {
         return Math.abs(projection.m22()) < 0.1f;
     }
@@ -238,11 +234,6 @@ public final class VoxySableDepthShim {
     private static State activeInPlaceState;
     private static int inPlaceDepthTexture;
 
-    //In-place variant for passes whose framebuffer binding we cannot own (Flywheel under Iris rebinds
-    //mid-pass, evicting the redirect that begin() relies on): instead of swapping the draw framebuffer,
-    //temporarily merge the LOD depth INTO the target's own depth texture, let the pass render against
-    //it, then restore every pixel the pass did not write. The pass can rebind framebuffers freely - the
-    //depth texture it tests against is the one we edited.
     public static void beginInPlace(Matrix4f modelView, Matrix4f projection, float[] ndcBounds) {
         if (activeInPlaceState != null) {
             activeInPlaceState.nesting++;
@@ -335,9 +326,6 @@ public final class VoxySableDepthShim {
         glActiveTexture(prevActive);
         int savedSampler2 = glGetIntegeri(GL_SAMPLER_BINDING, 2);
 
-        //Same rect begin used, and it has to be: the restore writes `before` wherever the pass did not
-        //draw, and outside that rect `before` is a stale snapshot no one refreshed. Scissored, those
-        //pixels are left exactly as the wrapped pass produced them - which is the no-shim result.
         state.applyScissor();
         copyDepth(inPlaceDepthTexture, IN_PLACE_AFTER.framebuffer.id, state.width, state.height);
         restoreUnchangedDepth(state);
@@ -605,9 +593,6 @@ public final class VoxySableDepthShim {
             int y0 = (int) Math.floor((ndcBounds[1] * 0.5f + 0.5f) * this.height);
             int x1 = (int) Math.ceil((ndcBounds[2] * 0.5f + 0.5f) * this.width);
             int y1 = (int) Math.ceil((ndcBounds[3] * 0.5f + 0.5f) * this.height);
-            //A pixel is covered as soon as the bounds touch it, and the projected extent is only as exact
-            //as the depth buffer's own sampling - a pixel of slack each way costs nothing and avoids
-            //shaving the edge off the very geometry the shim exists to depth-test
             this.scissorX = Math.max(0, x0 - 1);
             this.scissorY = Math.max(0, y0 - 1);
             this.scissorWidth = Math.min(this.width, x1 + 1) - this.scissorX;
@@ -628,14 +613,6 @@ public final class VoxySableDepthShim {
             //restoreMutableState just put the caller's scissor back; the bracketed pass runs under ours
             this.applyScissor();
 
-            //Sable renders every sub-level terrain layer through this bracket, including custom
-            //translucent layers used by Aeronautics' hot air.  Some of those layers arrive with depth
-            //writes disabled (and shader pipelines can also leave a non-terrain depth function).  That
-            //is normally harmless at vanilla distance, but here it lets an interior translucent volume
-            //draw over the already-rendered balloon shell after the shell has been redirected through
-            //our combined LOD framebuffer.  Make the sub-level pass use an ordinary, writable terrain
-            //depth buffer; restoreAll() reinstates the exact caller state immediately afterward.
-            //Reverse-Z never reaches this point: begin() deliberately rejects it above.
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LEQUAL);
             glDepthMask(true);

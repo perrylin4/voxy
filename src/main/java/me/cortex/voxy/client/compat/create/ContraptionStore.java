@@ -8,6 +8,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.state.BlockState;
 import org.joml.Matrix4f;
@@ -21,23 +22,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
 
-//Persists frozen contraption snapshots into voxy's aux storage, so a structure the player left behind is
-//still standing in the LOD after a reload rather than reappearing only once they walk back to it.
-//
-//What is stored is the source, not the mesh: a block list plus the pose it froze at. The mesh is rebuilt
-//from that, which is also what lets a snapshot be evicted from memory and brought back - the reason the
-//resident set could only grow before.
-//
-//Block states go out as a palette of BlockState NBT rather than as voxy block ids. Those ids belong to
-//one Mapper over a store that is explicitly a deletable cache, so deleting it renumbers everything and
-//an id list held anywhere else silently decodes to different blocks - the id space is dense, so there is
-//no invalid value to detect it by. The NBT form carries the block's name and properties and goes through
-//the vanilla data fixer on a rename, which is what makes it safe to keep outside the store that wrote it.
 public final class ContraptionStore {
     public static final String TABLE = "create_contraptions";
-    //FORMAT 2 adds the entity type's tracking range after the position. Legacy records decode with 80,
-    //the smallest range - sound for any type, at the cost of a halved presence radius for the larger ones.
-    private static final byte FORMAT = 2;
+    //FORMAT 3 persists the render NBT required by copycat models.
+    private static final byte FORMAT = 3;
     //A contraption is bounded by the +-127 local coordinate packing, so its block count cannot approach
     //this; the cap only stops a corrupt length from allocating wildly
     private static final int MAX_BLOCKS = 1 << 20;
@@ -125,6 +113,19 @@ public final class ContraptionStore {
                     .getOrThrow(e -> new IllegalStateException("Encoding block state: " + e)));
         }
         root.put("palette", paletteTag);
+        var renderNbt = snap.source().renderNbt();
+        if (renderNbt != null && !renderNbt.isEmpty()) {
+            var renderData = new ListTag();
+            for (var entry : renderNbt.entrySet()) {
+                var item = new CompoundTag();
+                item.putByte("x", (byte) entry.getKey().getX());
+                item.putByte("y", (byte) entry.getKey().getY());
+                item.putByte("z", (byte) entry.getKey().getZ());
+                item.put("data", entry.getValue().copy());
+                renderData.add(item);
+            }
+            root.put("render_data", renderData);
+        }
         var paletteBytes = new ByteArrayOutputStream();
         NbtIo.writeCompressed(root, paletteBytes);
         out.writeInt(paletteBytes.size());
@@ -184,6 +185,7 @@ public final class ContraptionStore {
             }
             boolean wide = palette.size() > 255;
             var blocks = new ArrayList<ShapeBlock>(count);
+            var states = new HashMap<net.minecraft.core.BlockPos, BlockState>(count * 2);
             for (int i = 0; i < count; i++) {
                 byte bx = in.readByte(), by = in.readByte(), bz = in.readByte();
                 int idx = wide ? in.readUnsignedShort() : in.readUnsignedByte();
@@ -193,15 +195,34 @@ public final class ContraptionStore {
                 var state = palette.get(idx);
                 if (state != null) {
                     blocks.add(new ShapeBlock(bx, by, bz, state));
+                    states.put(new net.minecraft.core.BlockPos(bx, by, bz), state);
                 }
             }
             if (blocks.isEmpty()) {
                 return null;
             }
-            //Copycat model data is not stored: it is read from block entity nbt that left with the
-            //entity, so a reloaded snapshot shows the copycat's own model rather than what it was
-            //wearing. Everything else about the shape is intact.
-            return new Stored(id, new DistantContraptionManager.Source(blocks, null), pose, x, y, z, dim,
+            HashMap<net.minecraft.core.BlockPos, CompoundTag> renderNbt = null;
+            HashMap<net.minecraft.core.BlockPos, net.neoforged.neoforge.client.model.data.ModelData> modelData = null;
+            if (value[0] >= 3 && root.contains("render_data", Tag.TAG_LIST)) {
+                var renderData = root.getList("render_data", Tag.TAG_COMPOUND);
+                if (renderData.size() > count) return null;
+                renderNbt = new HashMap<>(renderData.size() * 2);
+                modelData = new HashMap<>(renderData.size() * 2);
+                for (int i = 0; i < renderData.size(); i++) {
+                    var item = renderData.getCompound(i);
+                    var pos = new net.minecraft.core.BlockPos(item.getByte("x"), item.getByte("y"), item.getByte("z"));
+                    var state = states.get(pos);
+                    if (state == null || !item.contains("data", Tag.TAG_COMPOUND)) continue;
+                    var data = item.getCompound("data").copy();
+                    renderNbt.put(pos, data);
+                    var resolved = me.cortex.voxy.commonImpl.compat.CreateCopycatCompat
+                            .materialFromContraptionNbt(state, data);
+                    if (resolved != null) modelData.put(pos, resolved);
+                }
+                if (renderNbt.isEmpty()) renderNbt = null;
+                if (modelData.isEmpty()) modelData = null;
+            }
+            return new Stored(id, new DistantContraptionManager.Source(blocks, modelData, renderNbt), pose, x, y, z, dim,
                     trackingBlocks);
         } catch (Throwable t) {
             Logger.error("Decoding a stored contraption snapshot; dropping it", t);

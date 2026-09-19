@@ -19,10 +19,10 @@ public final class SableContraptionRenderDistance {
     private static final int CHUNKS_PER_SECTION_RENDER_DISTANCE = 32;
     private static final int BLOCKS_PER_CHUNK = 16;
     private static final double DEFAULT_SECTION_RENDER_DISTANCE = 16.0;
-    private static final int DEFAULT_PERCENT = 50;
+    private static final int DEFAULT_MAX_CHUNKS = 0;
     private static final double DEDICATED_SERVER_FALLBACK_BLOCKS = 2048.0;
 
-    private static final ConfigSnapshot DISABLED_CONFIG = new ConfigSnapshot(false, 0.0, DEFAULT_PERCENT, Long.MIN_VALUE);
+    private static final ConfigSnapshot DISABLED_CONFIG = new ConfigSnapshot(false, 0.0, DEFAULT_MAX_CHUNKS, Long.MIN_VALUE);
 
     private static ConfigSnapshot cachedConfig = DISABLED_CONFIG;
     private static volatile ConfigSnapshot runtimeClientConfig;
@@ -48,40 +48,37 @@ public final class SableContraptionRenderDistance {
         }
 
         int vanillaRenderDistanceChunks = getVanillaRenderDistanceChunks(level);
-        int contraptionDistanceChunks = extendVanillaRenderDistanceChunks(
+        int contraptionDistanceChunks = resolveRenderDistanceChunks(
                 vanillaRenderDistanceChunks,
                 config.sectionRenderDistance(),
-                config.simulatedContraptionRenderDistancePercent()
+                config.aeronauticsContraptionMaxChunks()
         );
         return contraptionDistanceChunks * BLOCKS_PER_CHUNK;
     }
 
-    public static int extendVanillaRenderDistanceChunks(int vanillaRenderDistanceChunks, double sectionRenderDistance, int simulatedContraptionRenderDistancePercent) {
+    public static int resolveRenderDistanceChunks(int vanillaRenderDistanceChunks, double sectionRenderDistance, int aeronauticsContraptionMaxChunks) {
         int vanillaDistanceChunks = Math.max(0, vanillaRenderDistanceChunks);
-        int percent = Math.max(0, Math.min(100, simulatedContraptionRenderDistancePercent));
-        if (percent == 0) {
-            return vanillaDistanceChunks;
-        }
-
-        int voxyRenderDistanceChunks = (int) Math.ceil(sectionRenderDistance * CHUNKS_PER_SECTION_RENDER_DISTANCE);
         if (sectionRenderDistance <= 0.0) {
             return vanillaDistanceChunks;
         }
 
-        return Math.max(0, (int) Math.ceil(vanillaDistanceChunks + ((voxyRenderDistanceChunks - vanillaDistanceChunks) * (percent / 100.0D))));
+        int lodDistanceChunks = (int) Math.ceil(sectionRenderDistance * CHUNKS_PER_SECTION_RENDER_DISTANCE);
+        int maxChunks = Math.max(0, aeronauticsContraptionMaxChunks);
+        int configuredDistanceChunks = maxChunks == 0 ? lodDistanceChunks : Math.min(maxChunks, lodDistanceChunks);
+        return Math.max(vanillaDistanceChunks, configuredDistanceChunks);
     }
 
     private static int getVanillaRenderDistanceChunks(ServerLevel level) {
         return Math.max(0, level.getServer().getPlayerList().getViewDistance());
     }
 
-    public static void updateClientConfig(boolean enabled, double sectionRenderDistance, int simulatedContraptionRenderDistancePercent) {
+    public static void updateClientConfig(boolean enabled, double sectionRenderDistance, int aeronauticsContraptionMaxChunks) {
         if (!enabled || sectionRenderDistance <= 0.0) {
-            runtimeClientConfig = new ConfigSnapshot(false, 0.0, simulatedContraptionRenderDistancePercent, Long.MAX_VALUE);
+            runtimeClientConfig = new ConfigSnapshot(false, 0.0, aeronauticsContraptionMaxChunks, Long.MAX_VALUE);
             return;
         }
 
-        runtimeClientConfig = new ConfigSnapshot(true, sectionRenderDistance, simulatedContraptionRenderDistancePercent, Long.MAX_VALUE);
+        runtimeClientConfig = new ConfigSnapshot(true, sectionRenderDistance, aeronauticsContraptionMaxChunks, Long.MAX_VALUE);
     }
 
     private static double getDedicatedServerRangeBlocks(long gameTime) {
@@ -162,20 +159,20 @@ public final class SableContraptionRenderDistance {
 
     private static ConfigSnapshot loadConfig(long lastModified) {
         if (!Files.exists(CONFIG_PATH)) {
-            return new ConfigSnapshot(true, DEFAULT_SECTION_RENDER_DISTANCE, DEFAULT_PERCENT, lastModified);
+            return new ConfigSnapshot(true, DEFAULT_SECTION_RENDER_DISTANCE, DEFAULT_MAX_CHUNKS, lastModified);
         }
 
         try (Reader reader = Files.newBufferedReader(CONFIG_PATH)) {
             JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
             boolean enabled = getBoolean(root, "enabled", true) && getBoolean(root, "enable_rendering", true);
             double sectionRenderDistance = getDouble(root, "section_render_distance", DEFAULT_SECTION_RENDER_DISTANCE);
-            int simulatedContraptionPercent = getInt(root, "simulated_contraption_render_distance_percent", DEFAULT_PERCENT);
+            int aeronauticsContraptionMaxChunks = getInt(root, "aeronautics_contraption_max_chunks", DEFAULT_MAX_CHUNKS);
 
             if (!enabled || sectionRenderDistance <= 0.0) {
-                return new ConfigSnapshot(false, 0.0, simulatedContraptionPercent, lastModified);
+                return new ConfigSnapshot(false, 0.0, aeronauticsContraptionMaxChunks, lastModified);
             }
 
-            return new ConfigSnapshot(true, sectionRenderDistance, simulatedContraptionPercent, lastModified);
+            return new ConfigSnapshot(true, sectionRenderDistance, aeronauticsContraptionMaxChunks, lastModified);
         } catch (Exception e) {
             Logger.error("Failed to load Voxy config for Sable simulated contraption render distance", e);
             return DISABLED_CONFIG;
@@ -206,7 +203,7 @@ public final class SableContraptionRenderDistance {
     private record ConfigSnapshot(
             boolean enabled,
             double sectionRenderDistance,
-            int simulatedContraptionRenderDistancePercent,
+            int aeronauticsContraptionMaxChunks,
             long lastModifiedMillis
     ) {
     }

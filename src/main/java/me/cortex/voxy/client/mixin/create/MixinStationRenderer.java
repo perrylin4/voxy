@@ -12,11 +12,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//The station's grey assembly-arrow disc renders through this vanilla BER (shouldRenderOffScreen=true,
-//getViewDistance=192, no Flywheel visual), so like the track BEs it floats over voxy LOD past the
-//view distance. Unlike the track, the station has no Flywheel path, so renderSafe is always the draw
-//entry - a HEAD cancel beyond the effective render distance (3D spherical, honoring height) reliably
-//stops it. Only while voxy renders LOD (the state that keeps the section alive); else Create's own.
 @Mixin(StationRenderer.class)
 public abstract class MixinStationRenderer {
     @Inject(

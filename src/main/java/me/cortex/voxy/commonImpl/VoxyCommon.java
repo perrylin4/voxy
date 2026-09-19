@@ -41,9 +41,6 @@ public class VoxyCommon {
         }
     }
 
-    //The name shown in mod lists, the Sodium options page and the join line. Read from the mod entry
-    //rather than repeated as a literal per call site. Needs a populated ModList, so not usable during
-    //early mixin bootstrap like the fields above.
     public static String displayName() {
         var list = ModList.get();
         if (list == null) {
@@ -92,7 +89,6 @@ public class VoxyCommon {
 
     public static void createInstance() {
         if (FACTORY == null) {
-            //Logger.info("Voxy factory");
             return;
         }
         if (INSTANCE != null) {

@@ -8,13 +8,6 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.phys.AABB;
 
-//Deferred re-ingest of the vanilla sections under a contraption event. The server broadcasts the
-//block changes one server tick after the packet that announces the event, so ingesting immediately
-//would read the pre-event sections; a short delay reads the settled state. Covers what the bulk
-//section packet cannot: a section where the machine occupies a single block gets a lone block-update
-//packet, and a placement (non-air) has no per-block ingest trigger at all. Bounded drain per tick; a
-//section whose chunk is not client-loaded is dropped - no packet means no data, and the stored LOD
-//is the leave-behind by design.
 public final class SectionReingestQueue {
     private SectionReingestQueue() {}
 

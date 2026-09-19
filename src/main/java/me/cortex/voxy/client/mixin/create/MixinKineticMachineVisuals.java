@@ -10,18 +10,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//The kinetic machines that override beginFrame to animate a moving sub-model each frame - the press
-//head, mixer pole, deployer hand, arm segments, cranks and valves, the flywheel wheel, the steam-engine
-//piston, the chain drive, and the bearing/pulley/gantry/elevator/valve/ejector shafts. Their override
-//shadows the base-class beginFrame, so the same distance cull is prepended to each: beyond the render
-//distance hide the instances and skip the per-frame transform, on return reveal and let it animate
-//again. All sixteen reach AbstractBlockEntityVisual (via ShaftVisual/KineticBlockEntityVisual or
-//directly), so `pos` and collectCrumblingInstances resolve on every one; six of them sit outside
-//content/kinetics/ (bearing, pulley, gantry, elevator, fluid valve, ejector) yet are placed machines.
-//
-//The *ActorVisual machines (saw/deployer/drill/harvester/roller/PSI/stabilized bearing) are not here:
-//they extend ActorVisual, are contraption actors rather than placed blocks, and carry no `pos` - the
-//contraption cull path owns them.
 @Mixin({
         com.simibubi.create.content.kinetics.press.PressVisual.class,
         com.simibubi.create.content.kinetics.gauge.GaugeVisual.class,

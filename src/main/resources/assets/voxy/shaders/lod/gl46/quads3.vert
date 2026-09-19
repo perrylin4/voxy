@@ -45,7 +45,6 @@ layout(location = 7) out flat uint quadDebug;
 
 vec2 taaShift();
 
-//TODO: add a mechanism so that some quads can ignore backface culling
 // this would help alot with stuff like crops as they would look kinda weird i think,
 // same with flowers etc
 void main() {
@@ -57,9 +56,6 @@ void main() {
 
     uint cornerId = gl_VertexID&3;
 
-    // Match the stencil handoff's camera-space sphere.  X/Z-only distance leaves a cylindrical LOD
-    // cutout beneath high-altitude players even after vanilla stops drawing the ground there.
-    // Squared distance still avoids a square root for every vertex.
     vec3 boundaryOffset = getQuadCornerPoint(quad, cornerId) - cameraSubPos;
     boundaryDistanceSquared = dot(boundaryOffset, boundaryOffset);
 

@@ -54,7 +54,6 @@ public class RenderResourceReuse {
         GlBuffer buffer = null;
         if (!GEOMETRY_BUFFER_CACHE.isEmpty()) {
             buffer = GEOMETRY_BUFFER_CACHE.removeFirst();
-            //Reuse buffer, todo: probably check the geometry size and try upsize if possible
         } else {
             long capacity = getGeometryBufferSize();
             long driverMemory = -1;
@@ -63,9 +62,8 @@ public class RenderResourceReuse {
             }
 
             glGetError();//Clear any errors
-            if (!(Capabilities.INSTANCE.isNvidia&& ThreadUtils.isWindows&&Capabilities.INSTANCE.sparseBuffer)) {//This hack makes it so it doesnt crash on renderdoc
+            if (!(Capabilities.INSTANCE.isNvidia&& ThreadUtils.isWindows&&Capabilities.INSTANCE.sparseBuffer)) {
                 buffer = new GlBuffer(capacity, false);//Only do this if we are not on nvidia
-                //TODO: FIXME: TEST, see if the issue is that we are trying to zero the entire buffer, try only zeroing increments
                 // or dont zero it at all
             } else {
                 Logger.info("Running on nvidia, using workaround sparse buffer allocation");
@@ -78,7 +76,6 @@ public class RenderResourceReuse {
                         buffer.free();
                     }
                     buffer = new GlBuffer(capacity, GL_SPARSE_STORAGE_BIT_ARB);
-                    //buffer.zero();
                     error = glGetError();
                     if (error != GL_NO_ERROR) {
                         buffer.free();

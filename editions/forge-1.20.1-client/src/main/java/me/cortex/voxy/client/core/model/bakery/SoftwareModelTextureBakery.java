@@ -18,7 +18,6 @@ import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.ColorResolver;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -55,7 +54,10 @@ public class SoftwareModelTextureBakery {
     private static final Matrix4f[] VIEWS = new Matrix4f[6];
 
     private final ReuseVertexConsumer opaqueVC = new ReuseVertexConsumer();
-    private final ReuseVertexConsumer translucentVC = new ReuseVertexConsumer(1/*has discard*/);
+    // Translucent cube faces must keep normal culling/blending semantics. Marking
+    // every translucent quad as alpha-cutout makes front/back/edge layers fold
+    // into dark cards during the six-direction offline projection.
+    private final ReuseVertexConsumer translucentVC = new ReuseVertexConsumer();
     private final SoftwareRasterizer rasterizer = new SoftwareRasterizer(ModelFactory.MODEL_TEXTURE_SIZE);
 
 
@@ -105,6 +107,12 @@ public class SoftwareModelTextureBakery {
                 .getBlockModelShaper()
                 .getBlockModel(state);
 
+        // Only FAST intentionally turns leaf cards into opaque geometry.  The
+        // previous 1.20.1 path forced every leaf mode solid here, disabling
+        // alpha discard and baking the black RGB hidden in transparent texels
+        // into the LOD atlas for some modded leaf textures.
+        boolean forceSolidLeaf = ModelFactory.isLeafBlockState(state)
+                && VoxyConfig.CONFIG.getLeafLodMode() == VoxyConfig.LeafLodMode.FAST;
         boolean crossCandidate = true;
         int diagonalFamilies = 0;
         int unculledQuads = 0;
@@ -122,7 +130,7 @@ public class SoftwareModelTextureBakery {
                     }
                 }
                 (layer == RenderType.translucent() ? this.translucentVC : this.opaqueVC)
-                        .quad(quad, ModelFactory.isLeafBlockState(state), layer);
+                        .quad(quad, forceSolidLeaf, layer);
             }
         }
         return crossCandidate && unculledQuads >= 2 && diagonalFamilies == 0b11;
@@ -298,7 +306,7 @@ public class SoftwareModelTextureBakery {
         if (state.getBlock() instanceof LiquidBlock) {
             blockRenderLayer = ItemBlockRenderTypes.getRenderLayer(state.getFluidState());
         } else {
-            if (state.getBlock() instanceof LeavesBlock) {
+            if (ModelFactory.isLeafBlockState(state)) {
                 blockRenderLayer = VoxyConfig.CONFIG.getLeafLodMode() == VoxyConfig.LeafLodMode.FAST
                         ? RenderType.solid()
                         : RenderType.cutout();

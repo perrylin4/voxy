@@ -15,7 +15,6 @@ public class CompressionStorageAdaptor extends DelegatingStorageAdaptor {
     }
 
 
-    //TODO: figure out a nicer way w.r.t scratch buffer shit
     @Override
     public MemoryBuffer getSectionData(long key, MemoryBuffer scratch) {
         var data = this.delegate.getSectionData(key, scratch);

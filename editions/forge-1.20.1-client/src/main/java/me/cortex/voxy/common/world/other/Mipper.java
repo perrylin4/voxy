@@ -101,6 +101,10 @@ public final class Mipper {
         return bestIndex;
     }
 
+    private static int downsampleLight(int blockLightSum, int skyLight) {
+        return (blockLightSum / 8 & 0xF0) | skyLight;
+    }
+
     public static long mip(long i000, long i100, long i001, long i101,
                            long i010, long i110, long i011, long i111,
                            Mapper mapper) {
@@ -124,6 +128,7 @@ public final class Mipper {
         int uniqueCount = 0;
         int nonAir = 0;
         int fluidLayer = -1;
+        int fluidOccupancy = 0;
         int blockLight = 0;
         int skyLight = 0;
 
@@ -166,10 +171,11 @@ public final class Mipper {
             scratch.uniqueHighestY[uniqueIndex] = Math.max(scratch.uniqueHighestY[uniqueIndex], y);
             if ((scratch.uniqueMetadata[uniqueIndex] & META_FLUID) != 0) {
                 fluidLayer = Math.max(fluidLayer, y);
+                fluidOccupancy++;
             }
         }
 
-        if (fluidLayer >= 0) {
+        if (fluidLayer >= 0 && fluidOccupancy >= 2) {
             boolean coveredByOpaque = false;
             int opaqueScore = 0;
             for (int index = 0; index < 8; index++) {
@@ -202,14 +208,13 @@ public final class Mipper {
                 }
                 if (bestUnique >= 0 && bestScore > 0 && opaqueScore <= bestScore) {
                     int selected = pickRepresentative(scratch, bestUnique, fluidLayer, true);
-                    if (selected >= 0) return states[selected];
+                    if (selected >= 0) {
+                        return withLight(states[selected], downsampleLight(blockLight, skyLight));
+                    }
                 }
             }
         }
 
-        // Nearest occupancy rounding: one to three solid children become air;
-        // four to eight remain solid. This removes the former +1-voxel bias at
-        // every LOD ring while retaining one-block floors and roofs at ties.
         if (nonAir >= 4) {
             int bestUnique = -1;
             int bestScore = Integer.MIN_VALUE;
@@ -228,14 +233,26 @@ public final class Mipper {
             if (bestUnique >= 0) {
                 int selected = pickRepresentative(
                         scratch, bestUnique, scratch.uniqueHighestY[bestUnique], false);
-                if (selected >= 0) return states[selected];
+                if (selected >= 0) {
+                    boolean flatSurfaceTie = nonAir == 4
+                            && scratch.stateUniqueIndex[0] >= 0
+                            && scratch.stateUniqueIndex[1] >= 0
+                            && scratch.stateUniqueIndex[2] >= 0
+                            && scratch.stateUniqueIndex[3] >= 0
+                            && scratch.stateUniqueIndex[4] < 0
+                            && scratch.stateUniqueIndex[5] < 0
+                            && scratch.stateUniqueIndex[6] < 0
+                            && scratch.stateUniqueIndex[7] < 0;
+                    long selectedState = withLight(states[selected], downsampleLight(blockLight, skyLight));
+                    if (flatSurfaceTie) return Mapper.makeSurfaceCarrier(selectedState);
+                    if (nonAir > 4) return selectedState;
+                }
             }
         }
 
-        blockLight = blockLight / 8 & 0xF0;
         // Do not return an arbitrary solid child when minority occupancy rounded
         // to air. Maximum skylight also prevents successive mips turning open air black.
-        return withLight(nonAir == 0 ? i111 : 0L, blockLight | skyLight);
+        return withLight(nonAir == 0 ? i111 : 0L, downsampleLight(blockLight, skyLight));
     }
 
     private static final class Scratch {

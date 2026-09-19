@@ -13,55 +13,21 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-//Frozen-snapshot store for the moving parts of placed kinetic machine blocks (rotating shafts, cogs,
-//gearboxes...). The static shell of a machine is voxelised into the LOD like any block, but its moving
-//part is a Flywheel instance the LOD never sees - the distance cull hides it beyond the render distance
-//and the machine turns into a bare shell out there. This records each machine the moment it leaves the
-//live path (crossing the render-distance sphere, its chunk unloading, or the sweep finding it) and
-//draws a frozen copy through the distant pipeline, occluded by LOD depth like the track meshes.
-//
-//A snapshot is just blockstate + frozen angle + light: rebake pulls the state's baked json model - the
-//very model Create's backend-off BER spins - and emits it under the spin transform, exactly how the
-//track renderer bakes bezier segments. Blocks whose json is empty (pure-partial machines) yield no
-//snapshot and stay hidden-only. Batched into one DistantMesh per 16^3 section, so a large base costs
-//one draw per section rather than one per shaft. Queues are concurrent because the cull transitions
-//fire from Flywheel's (potentially parallel) frame plan; all map/GL work happens on the client tick.
 public final class KineticSnapshots {
     private KineticSnapshots() {}
 
     private static final int CAPTURES_PER_TICK = 64;
-    //Shared by the queue drain and the sweep: a capture is a full BER pass plus light sampling, and an
-    //unbounded batch of them (first sweep contact with a dense factory) is a frame hitch. The queue
-    //drains first; the sweep spends the remainder.
     private static int captureBudget;
     private static final int REBAKES_PER_TICK = 4;
-    //Sections dirtied by a removal, serviced before the general dirty scan: a removal is usually a
-    //reveal (the live path taking the position back), and until the rebake lands the frozen copy
-    //draws under the live spinning machine - the general scan can be a backlog of sweep recaptures
-    //behind. Overflow stays queued ahead of the scan for the next tick.
     private static final it.unimi.dsi.fastutil.longs.LongOpenHashSet PRIORITY_REBAKE =
             new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
 
-    //One frozen machine part: what block, at what angle, in what light. Geometry is not stored -
-    //rebake pulls the baked models and transforms them, the same way the track renderer bakes bezier
-    //segments. (The json model is the rotating model Create's backend-off BER spins; capturing the
-    //BER's vertex stream instead died on catnip's SuperByteBuffer being empty outside the render
-    //pass.) bakeJson covers the chunk-hidden rotating json; bearingFacing != null additionally bakes
-    //the bearing's partials (shaft half + top disc at its own frozen angle).
-    //chains: one row per chain-conveyor connection - [startOffX,startOffY,startOffZ (from the block
-    //centre), yawDeg, pitchDeg, chainLength, sky2, block2]; non-null marks the block as a chain
-    //conveyor (shaft + wheel + per-connection guard + chain strap get baked).
     record Snap(net.minecraft.world.level.block.state.BlockState state,
                 net.minecraft.core.Direction.Axis axis, float angleRad, int sky, int block,
                 boolean bakeJson, net.minecraft.core.Direction shaftHalfFacing,
                 net.minecraft.core.Direction bearingFacing, float bearingTopAngleRad, boolean woodenTop,
                 float[][] chains, float[] bnbChain, float[] generic, boolean gantryCarriage) {
 
-        //A snap with no geometry sources is a negative-capture record: this state at this position
-        //yields nothing to bake. Only the SKIP path stores these - a real capture always carries at
-        //least one source - so emptiness IS the marker, no extra field. rebake emits nothing for one
-        //(every emit branch is gated on the fields that are null here), so it costs a map entry and
-        //nothing downstream.
         boolean hollow() {
             return !this.bakeJson && this.shaftHalfFacing == null && this.bearingFacing == null
                     && this.chains == null && this.bnbChain == null && this.generic == null
@@ -71,11 +37,6 @@ public final class KineticSnapshots {
 
     private static final boolean BNB_LOADED = net.neoforged.fml.ModList.get().isLoaded("bits_n_bobs");
 
-    //The thread currently running a capture (null = none). The visualization gate answers false while
-    //a capture runs so the kinetic BERs take their full backend-off pass into our consumer (see
-    //MixinVisualizationManagerImpl). This must stay thread-scoped - Flywheel may query the gate from
-    //its worker threads, which must not see the render thread's capture - but a volatile-thread compare
-    //is cheaper on that very hot query path than a ThreadLocalMap lookup.
     private static volatile Thread captureThread = null;
 
     public static boolean isCapturingOnThisThread() {
@@ -100,9 +61,6 @@ public final class KineticSnapshots {
     private static final Queue<BlockPos> CAPTURE_QUEUE = new ConcurrentLinkedQueue<>();
     private static final Queue<BlockPos> REMOVE_QUEUE = new ConcurrentLinkedQueue<>();
     private static ResourceLocation dim;
-    //Snapshotted bearing positions, for cleanup when the sweep finds their block gone. The top disc
-    //freezes at the cull transition, and DistantContraptionManager freezes the driven contraption at
-    //the same reach boundary - the two halves stop in the same instant and stay aligned. Tick-thread.
     private static final java.util.Set<BlockPos> BEARING_POSITIONS = new java.util.HashSet<>();
 
     //Diagnostics for /voxy debug trains + /voxy debug kinetics
@@ -127,9 +85,6 @@ public final class KineticSnapshots {
         return n;
     }
 
-    //Full state dump for /voxy debug kinetics: queues, sweep, every bucket near the camera, and the
-    //last capture attempts with their renderer class and vertex counts - enough to tell whether the
-    //pipeline captured nothing, captured garbage, or captured fine and the draw side dropped it.
     public static String debugDump(double camX, double camY, double camZ) {
         var sb = new StringBuilder();
         sb.append("sections=").append(SECTIONS.size())
@@ -173,9 +128,6 @@ public final class KineticSnapshots {
         return sb.toString();
     }
 
-    //Called from the cull mixins' beginFrame (any thread): position crossing out of the live path.
-    //Ship-borne positions are excluded - ships render natively (one connected drivetrain), and a
-    //frozen snapshot at plot-grid coordinates would just be dead weight past the draw radius.
     public static void queueCapture(BlockPos pos) {
         if (me.cortex.voxy.client.compat.ShipBorne.isShipBorne(pos)) {
             return;
@@ -188,11 +140,6 @@ public final class KineticSnapshots {
         REMOVE_QUEUE.add(pos.immutable());
     }
 
-    //Drivetrain tick-alignment (bearing disc vs the structure it spins): each half freezes when IT
-    //crosses the boundary, so the two hold different ticks' angles and read as permanently meshed
-    //wrong. Whichever side freezes triggers the other to re-freeze on the same tick: the contraption
-    //manager calls recaptureAt on ITS freeze tick, and a self-initiated bearing capture posts the
-    //anchor here for the manager to consume and refresh its frozen pose.
     private static final java.util.Set<BlockPos> ANCHOR_RECAPTURED = new java.util.HashSet<>();
     private static boolean inManagerRecapture;
 
@@ -201,7 +148,7 @@ public final class KineticSnapshots {
         if (mc.level == null || me.cortex.voxy.client.compat.ShipBorne.isShipBorne(pos)) {
             return;
         }
-        if (!(mc.level.getBlockEntity(pos) instanceof KineticBlockEntity kbe)) {
+        if (!(loadedBlockEntity(mc.level, pos) instanceof KineticBlockEntity kbe)) {
             return;
         }
         //Manager-driven: don't post the anchor back, or next tick's consume would re-refresh the
@@ -219,12 +166,6 @@ public final class KineticSnapshots {
     }
 
 
-    //Distance alone does not bound what is held: a dense factory inside the render radius can hold more
-    //than a sparse world's entire radius does. Furthest bucket first, and the whole bucket goes - unlike
-    //a contraption, a kinetic snapshot's source is larger than the mesh it builds (measured at 1.17x,
-    //nearly all of it recorded vertex data that cannot be rebuilt from the block state), so keeping the
-    //source to rebuild from would cost more than the mesh it freed. The sweep captures it again when the
-    //player comes back.
     private static void enforceGpuBudget(double camX, double camY, double camZ) {
         long budget = (long) VoxyConfig.CONFIG.distantKineticGpuBudgetMiB * 1024L * 1024L;
         if (budget <= 0) {
@@ -330,15 +271,12 @@ public final class KineticSnapshots {
             double reachSq = reach * reach;
             KineticCull.cachedReachSq = reachSq;
             captureBudget = CAPTURES_PER_TICK;
-            //The queue leaves the sweep a floor of the budget: a busy factory refills the queue every
-            //tick, and a sweep that never gets a slot parks its cursor on the same chunk forever (the
-            //mid-slice rewind) - ghost reclaim and recapture both stall behind it.
             while (captureBudget > 16 && (pos = CAPTURE_QUEUE.poll()) != null) {
                 //Raced back inside the live path between the queue and this tick: the visual draws it
                 if (pos.distToCenterSqr(cam.x, cam.y, cam.z) < reachSq) {
                     continue;
             }
-                if (level.getBlockEntity(pos) instanceof KineticBlockEntity be) {
+                if (loadedBlockEntity(level, pos) instanceof KineticBlockEntity be) {
                     capture(level, be);
                     captureBudget--;
             }
@@ -365,12 +303,6 @@ public final class KineticSnapshots {
                 rebake(bucket);
                 rebaked++;
             }
-            //Distance-bound the snapshot store. Leave-behinds in unloaded chunks are kept frozen on
-            //purpose, but the sweep only visits LOADED chunks, so without this a long session across a
-            //machine-heavy world accumulates a snapshot (VAO+VBO+heap verts) for every kinetic BE ever
-            //passed, and the per-frame draw loop iterates all of them. The renderer only draws snapshots
-            //within the kinetic render distance; anything past it is pure waste. Evict buckets beyond that
-            //(plus 2 chunks of hysteresis) so the resident set is a spatial working set, not cumulative.
             double maxDist = cfg.createRenderDistance(cfg.distantKineticMaxChunks) + 32.0;
             double maxDistSq = maxDist * maxDist;
             SECTIONS.long2ObjectEntrySet().removeIf(entry -> {
@@ -403,12 +335,6 @@ public final class KineticSnapshots {
             sectionCount = SECTIONS.size();
         }
 
-        //Rotating cursor over the loaded-chunk disk. The cull-transition capture only fires from a live
-        //visual's beginFrame - but the raycast culler (nowheel) DELETES occluded visuals outright, so a
-        //machine it culled near the view-distance boundary never crosses our transition and got no
-        //snapshot ("nothing in the transition band, snapshots only appear once the chunk unloads"). This
-        //sweep walks a slice of the loaded disk each tick and captures any kinetic BE that is beyond the
-        //reach and not yet snapshotted, visual or no visual. Full disk coverage in ~1s at 48 chunks/tick.
         private static int sweepCursor;
         private static final int SWEEP_CHUNKS_PER_TICK = 48;
 
@@ -430,14 +356,6 @@ public final class KineticSnapshots {
             if (!(chunk instanceof net.minecraft.world.level.chunk.LevelChunk levelChunk)) {
                 continue;
             }
-            //A loaded chunk is the authority on its own blocks: any snapshot here whose kinetic BE is
-            //gone (machine broken or disassembled into something else) is a ghost - drop it. Unloaded
-            //chunks are never touched, so leave-behinds stay frozen.
-            //
-            //Skipped while nothing is snapshotted at all: this is 24 lookups per chunk (the full build
-            //height) times 48 chunks a tick, and in a world with no frozen machines every one of them
-            //misses. That is the common case - snapshots only exist where the player has flown past
-            //running machinery and left it behind.
             if (!SECTIONS.isEmpty()) {
                 for (int sy = level.getMinSection(); sy < level.getMaxSection(); sy++) {
                     long bucketKey = BlockPos.asLong(cx, sy, cz);
@@ -450,7 +368,7 @@ public final class KineticSnapshots {
                         if ((snapPos.getX() >> 4) != cx || (snapPos.getZ() >> 4) != cz) {
                             return false;
                         }
-                        if (level.getBlockEntity(snapPos) instanceof KineticBlockEntity) {
+                        if (levelChunk.getBlockEntities().get(snapPos) instanceof KineticBlockEntity) {
                             return false;
                         }
                         bucket.dirty = true;
@@ -474,12 +392,6 @@ public final class KineticSnapshots {
                 BlockPos bePos = kbe.getBlockPos();
                 double distSq = bePos.distToCenterSqr(camX, camY, camZ);
                 if (distSq <= reachSq || chunkIsShipBorne) {
-                    //Machines whose animation lives only in a BER have no visual, so nothing queues a
-                    //remove when the player comes back inside - the frozen copy overlaps the live
-                    //spinning render wherever the boundary section still draws (the turntable ghost).
-                    //The sweep is the reclaim authority for them: live BE well inside the live domain,
-                    //drop its snapshot. (Visual-owning machines already remove on return; this is a
-                    //no-op for them.)
                     if (distSq <= innerSq) {
                         Bucket bucket = SECTIONS.get(sectionKey(bePos));
                         Snap removed = bucket == null ? null : bucket.geoms.remove(bePos);
@@ -508,9 +420,16 @@ public final class KineticSnapshots {
         }
     }
 
-    //Does the distant pipeline actually draw geometry for this position - a hollow record or an
-    //unbaked bucket draws nothing, and standing the live render down against one of those leaves a
-    //hole instead of a hand-over.
+    private static net.minecraft.world.level.block.entity.BlockEntity loadedBlockEntity(
+            ClientLevel level, BlockPos pos) {
+        var chunk = level.getChunk(pos.getX() >> 4, pos.getZ() >> 4,
+                net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false);
+        if (!(chunk instanceof net.minecraft.world.level.chunk.LevelChunk levelChunk)) {
+            return null;
+        }
+        return levelChunk.getBlockEntities().get(pos);
+    }
+
     static boolean drawsSnapAt(BlockPos pos) {
         Bucket bucket = SECTIONS.get(sectionKey(pos));
         if (bucket == null || bucket.mesh == null) {
@@ -545,9 +464,6 @@ public final class KineticSnapshots {
             if (!(be instanceof KineticBlockEntity kbe)) {
                 continue;
             }
-            //The sweep has usually been here already - an unloading chunk lives at the disk edge. Only
-            //the never-captured residue pays a capture, so the burst is a handful of machines, not the
-            //chunk. Cannot defer past the event: the block entities are gone after it.
             if (hasCurrentSnap(kbe.getBlockPos(), kbe.getBlockState())) {
                 continue;
             }
@@ -561,9 +477,6 @@ public final class KineticSnapshots {
             var state = be.getBlockState();
             var model = Minecraft.getInstance().getModelManager().getBlockModelShaper().getBlockModel(state);
 
-            //Machines whose json is a static shell keep their partials here: bearings get the shaft
-            //half (toward the back) plus the top disc at the bearing's own frozen angle; creative
-            //motors get the shaft half toward their FACING (their getRotatedModel).
             net.minecraft.core.Direction shaftHalfFacing = null;
             net.minecraft.core.Direction bearingFacing = null;
             float bearingTopAngle = 0.0f;
@@ -613,21 +526,12 @@ public final class KineticSnapshots {
                 }
             }
 
-            //Sample above the block, not inside it: the machine itself is a solid voxel and reads 0
-            //(pitch-black moving parts whenever the voxel store already has the chunk - the same trap
-            //the track renderer hit). Fall back to the block's own cell if the space above reads dark.
             int light = DistantLightSampler.samplePeek(level, pos.getX(), pos.getY() + 1, pos.getZ());
             if (DistantLightSampler.sky(light) == 0 && DistantLightSampler.block(light) == 0) {
                 light = DistantLightSampler.samplePeek(level, pos.getX(), pos.getY(), pos.getZ());
             }
             int skyLight = DistantLightSampler.sky(light), blockLight = DistantLightSampler.block(light);
 
-            //Generic full-pass capture: run the machine's actual BER with the visualization gate
-            //bypassed - the complete backend-off pass (rotating model AND machine-specific moving
-            //parts: press heads, fan blades, addon gears) streams into the consumer at freeze pose.
-            //Succeeds -> replaces the json/partial special cases below; fails -> they take over.
-            //Chain straps stay in their own fields either way (they draw on non-atlas render types
-            //the consumer discards).
             float[] generic = null;
             var renderer = Minecraft.getInstance().getBlockEntityRenderDispatcher().getRenderer(be);
             if (renderer instanceof KineticBlockEntityRenderer<?>) {
@@ -655,26 +559,13 @@ public final class KineticSnapshots {
                 bearingFacing = null;
             }
 
-            //Only jsons the chunk cannot see are rotating parts (Create hides them from the chunk
-            //layers and spins them in the BER): those get baked into the snapshot. A json the chunk
-            //renders (a bearing's static base) is already in the voxel LOD - baking it again would
-            //double it, spun to a nonsense angle.
             boolean bakeJson = generic == null && !chunkVisible(model, state)
                     && !(model.getQuads(null, null, net.minecraft.util.RandomSource.create(42)).isEmpty()
                     && model.getQuads(null, net.minecraft.core.Direction.UP, net.minecraft.util.RandomSource.create(42)).isEmpty());
-            //The carriage's body json is chunk-visible, so a failed generic capture would fall to the
-            //SKIP verdict and the pinion + inner shaft would simply not exist at LOD range. Those two
-            //parts are reproducible from state and position alone (bakeGantryCarriage), so the record
-            //stays real instead.
             boolean gantryCarriage = generic == null
                     && be instanceof com.simibubi.create.content.contraptions.gantry.GantryCarriageBlockEntity;
             if (generic == null && !bakeJson && shaftHalfFacing == null && bearingFacing == null
                     && chains == null && bnbChain == null && !gantryCarriage) {
-                //Nothing to bake for this state - record that verdict so the sweep's dedup holds and
-                //the classification (renderer probe, chunkVisible, light sampling) runs once, not once
-                //per sweep pass. The bucket lifecycle - ghost reclaim, distance and GPU eviction,
-                //dimension clear - covers the record without a parallel structure. The stored state is
-                //the retry key: a different block at this position re-evaluates.
                 Bucket bucket = SECTIONS.computeIfAbsent(sectionKey(pos), k -> new Bucket());
                 Snap prior = bucket.geoms.put(pos.immutable(),
                         new Snap(state, null, 0.0f, 0, 0, false, null, null, 0.0f, false, null, null, null, false));
@@ -690,14 +581,6 @@ public final class KineticSnapshots {
                 axis = KineticBlockEntityRenderer.getRotationAxisOf(be);
             } catch (Throwable ignored) {
             }
-            //Phase at render time zero, not at the capture tick. Neighbouring shafts of one drivetrain
-            //are captured on different ticks (the sweep spreads work, the budget splits chunks), and a
-            //per-capture time term gives each segment its own frozen moment - a connected line reads as
-            //broken. The offset term alone is the drivetrain's pose at one shared instant, so every
-            //segment agrees; the cost is a small phase snap where a moving part crosses the LOD
-            //boundary, invisible at that distance next to adjacent segments disagreeing. The bearing
-            //top disc keeps its freeze-tick angle (bearingTopAngleRad) - that one must match the
-            //contraption pose frozen with it.
             float angle = axis != null
                     ? KineticBlockEntityRenderer.getRotationOffsetForPosition(be, pos, axis) % 360.0f / 180.0f * (float) Math.PI
                     : 0.0f;
@@ -733,12 +616,6 @@ public final class KineticSnapshots {
                 axis == net.minecraft.core.Direction.Axis.Z ? 1 : 0);
     }
 
-    //Gantry carriage moving parts (inner shaft + pinion), computed from state and position alone so
-    //the frozen contraption bake - where the entity and its block entities are long gone - and the
-    //placed-block fallback share one implementation. Angles are the offset-only t=0 convention every
-    //frozen drivetrain part uses. Matrix order is GantryCarriageRenderer.renderSafe's SuperByteBuffer
-    //call order (first call outermost); the pinion's visual position, axis flip and 9/16 pivot are
-    //that renderer's own.
     static void bakeGantryCarriage(DistantMeshBuilder builder, org.joml.Matrix4f transform,
                                    net.minecraft.world.level.block.state.BlockState state,
                                    BlockPos parityPos, float lx, float ly, float lz, int sky, int block) {
@@ -785,10 +662,6 @@ public final class KineticSnapshots {
         builder.transformedModel(com.simibubi.create.AllPartialModels.GANTRY_COGS.get(), transform, sky, block);
     }
 
-    //Shaft half at the machine's frozen kinetic angle: rotateToFace(facing) alignment as
-    //CachedBuffers.partialFacing bakes it, kinetic spin outside it about the facing axis. Matrix order
-    //is the SuperByteBuffer call order (first call outermost). Covers bearings (facing = back of the
-    //bearing) and creative motors (facing = the FACING property).
     private static void bakeShaftHalf(DistantMeshBuilder builder, org.joml.Matrix4f transform, Snap snap,
                                       float lx, float ly, float lz) {
         var facing = snap.shaftHalfFacing();
@@ -801,8 +674,7 @@ public final class KineticSnapshots {
                 snap.sky(), snap.block());
     }
 
-    //Reproduces BearingRenderer.renderSafe's top disc: spin by the bearing's own frozen angle about
-    //the facing axis, then align to the facing (catnip angle helpers inlined).
+    //Reproduces BearingRenderer.renderSafe's top disc
     private static void bakeBearingTop(DistantMeshBuilder builder, org.joml.Matrix4f transform, Snap snap,
                                        float lx, float ly, float lz) {
         var facing = snap.bearingFacing();
@@ -820,10 +692,7 @@ public final class KineticSnapshots {
         builder.transformedModel(top.get(), transform, snap.sky(), snap.block());
     }
 
-    //Chain conveyor: the wheel shaft (kinetic spin), the wheel disc, and per connection the guard
-    //plate plus the chain strap. Reproduces ChainConveyorRenderer's backend-off pass at freeze pose;
-    //the strap is its far-mip variant (static UVs, thin radius), vertices hand-built the way
-    //renderPart lays them out, textured from the vanilla chain sprite in the block atlas.
+    //Chain conveyor
     private static void bakeChainConveyor(DistantMeshBuilder builder, org.joml.Matrix4f transform, Snap snap,
                                           float lx, float ly, float lz) {
         transform.identity().translate(lx, ly, lz).translate(0.5f, 0.5f, 0.5f);
@@ -908,11 +777,6 @@ public final class KineticSnapshots {
         return (float) Math.toRadians(degrees);
     }
 
-    //Does the chunk actually render this model? Two independent gates, both required:
-    //renderShape != MODEL means the chunk never draws the json no matter what the model answers
-    //(bits_n_bobs cogs: ANIMATED + a plain json - the json is the BER's spin model, snapshot owns it),
-    //and a MODEL-shaped block can still hide its json from the chunk layers per render type
-    //(Create cogs). Only a MODEL-shaped block whose model answers the chunk layers is chunk-visible.
     static boolean chunkVisible(net.minecraft.client.resources.model.BakedModel model,
                                 net.minecraft.world.level.block.state.BlockState state) {
         if (state.getRenderShape() != net.minecraft.world.level.block.RenderShape.MODEL) {
@@ -1021,9 +885,6 @@ public final class KineticSnapshots {
         public com.mojang.blaze3d.vertex.VertexConsumer setNormal(float x, float y, float z) { return this; }
     };
 
-    //Vertex capture fed by the machine's own renderer: section-local offset applied here, per-BE light
-    //baked into the vertices, shade/face derived from the streamed normal. Package-visible: the ship
-    //kinetic renderer drives the same capture with a zero offset.
     static final class Capture implements net.minecraft.client.renderer.MultiBufferSource, com.mojang.blaze3d.vertex.VertexConsumer {
         private final float ox, oy, oz;
         private final int sky, block;

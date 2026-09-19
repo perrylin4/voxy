@@ -44,10 +44,6 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
 
         //Bind the drawbuffers
         var oDT = this.data.opaqueDrawTargets;
-        //Every LOD terrain raster pass writes all of these per fragment. With a pack asking for 6-8
-        //targets the same geometry costs that many times the ROP bandwidth it does without shaders,
-        //which is the main reason LOD gets dramatically more expensive when a pack is loaded. Logged
-        //once so the number is in the log when diagnosing a shaders-only framerate drop.
         Logger.info("Iris LOD framebuffer: " + oDT.length + " opaque draw targets, "
                 + this.data.translucentDrawTargets.length + " translucent");
         int[] binding = new int[oDT.length];
@@ -146,7 +142,6 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
             glDepthFunc(this.properties.closerEqualDepthCompare());
             glColorMask(true, true, true, true);
         } else {
-            //Packs that skip the depth-hack consume the raw sentinel protocol at vanilla-covered
             //pixels; the setup pass stamped reprojected depth there for the hook geometry, so
             //restore the value they expect
             this.fb.bind();
@@ -172,6 +167,10 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
                     viewport, this.targetTransform.set(viewport.vanillaProjection).mul(viewport.modelView));
             glColorMask(true, true, true, true);
         } else {
+            if (net.neoforged.fml.ModList.get().isLoaded("create")) {
+                me.cortex.voxy.client.compat.create.DistantTrainRenderer.replayDepthToSource(
+                        viewport, sourceFrameBuffer, srcWidth, srcHeight, this.properties.closerEqualDepthCompare());
+            }
             // normally disabled by AbstractRenderPipeline but since we are skipping it we do it here
             glDisable(GL_STENCIL_TEST);
             glDisable(GL_DEPTH_TEST);
@@ -187,7 +186,7 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
     @Override
     public void bindUniforms(int bindingPoint) {
         if (this.shaderUniforms != null) {
-            GL30.glBindBufferBase(GL_UNIFORM_BUFFER, bindingPoint, this.shaderUniforms.id);// todo: dont randomly select this to 5
+            GL30.glBindBufferBase(GL_UNIFORM_BUFFER, bindingPoint, this.shaderUniforms.id);
         }
     }
 
@@ -229,11 +228,7 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         return this.fbTranslucent.getDepthTex().id;
     }
 
-    private static final int UNIFORM_BINDING_POINT = 7;//TODO make ths binding point... not randomly 5
-    //Forwarded shader-pack SSBOs bind here. Voxy itself uses SSBO 1/2/5, and VoxyRenderSystem saves &
-    //restores only binding points [0,10) each frame - base 6 keeps the forwarded set (6-9) inside that
-    //window so it gets restored. A base past that window leaks into iris' post-voxy passes.
-    //Must stay in lockstep with the GLSL "#define BUFFER_BINDING_INDEX_BASE" below.
+    private static final int UNIFORM_BINDING_POINT = 7;
     private static final int FORWARDED_SSBO_BINDING_BASE = 6;
 
     private StringBuilder buildGenericShaderHeader(AbstractSectionRenderer<?, ?> renderer, String input) {
@@ -251,7 +246,7 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         }
 
         if (this.data.getImageSet() != null) {
-            builder.append("#define BASE_SAMPLER_BINDING_INDEX 6\n");//TODO: DONT RANDOMLY MAKE THIS 6
+            builder.append("#define BASE_SAMPLER_BINDING_INDEX 6\n");
             builder.append(this.data.getImageSet().layout()).append("\n\n");
         }
 
@@ -311,6 +306,11 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
     @Override
     public float[] getRenderScalingFactor() {
         return this.data.resolutionScale;
+    }
+
+    @Override
+    public boolean useDynamicFarPlane() {
+        return this.data.useDynamicFarPlane;
     }
 
 

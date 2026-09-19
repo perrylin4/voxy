@@ -58,3 +58,7 @@ bool modelIsLava(BlockModel model) {
 bool modelIsLeaf(BlockModel model) {
     return ((model.flagsA)&128u) != 0;
 }
+
+float modelFluidHeight(BlockModel model) {
+    return float((model.flagsA >> 8u) & 31u) / 9.0;
+}

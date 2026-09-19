@@ -17,17 +17,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//Generalises the carriage body cull to every contraption: bearings, gantries, elevators, mounted
-///oriented contraptions (airships, boats from addons) all render their body through this base
-//ContraptionVisual's VisualEmbedding, the same way a train does. Their vanilla actor/BE pass is
-//already covered by MixinContraptionEntityRenderer (base EntityRenderer); this covers the Flywheel
-//embedding body. Same mechanism as MixinCarriageContraptionVisual: at beginFrame TAIL (so the
-//engine's per-frame embedding setup + setEmbeddingMatrices already ran), collapse the embedding
-//pose to a zero matrix beyond the render distance so every vertex degenerates to a point.
-//embedding is this class's own field (direct @Shadow); entity comes via the AbstractEntityVisual
-//accessor. The train is EXCLUDED here - CarriageContraptionVisual (the one subclass) keeps its own
-//validated mixin (embedding + bogey hide), and would otherwise be double-handled since its beginFrame
-//calls super.beginFrame.
 @Mixin(ContraptionVisual.class)
 public abstract class MixinContraptionVisual {
     @Shadow @Final protected VisualEmbedding embedding;
@@ -48,9 +37,6 @@ public abstract class MixinContraptionVisual {
         //Riding a sable ship the entity sits at plot-grid coordinates, where a world-space distance is
         //meaningless - leave it to sable
         if (me.cortex.voxy.client.compat.ShipBorne.isShipBorne(entity.getX(), entity.getZ())) {
-            //Sable only registers its per-plot Flywheel state at entity-join time, which is too early on
-            //world load (sub-level packets not in yet) - without the state its setEmbeddingMatrices
-            //override silently bails and the block body renders at plot coordinates. Re-register here.
             me.cortex.voxy.client.compat.ShipBorne.ensureShipFlywheelState(entity);
             return;
         }

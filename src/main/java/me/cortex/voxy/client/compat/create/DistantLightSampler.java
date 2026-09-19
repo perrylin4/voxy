@@ -4,9 +4,6 @@ import me.cortex.voxy.common.world.other.Mapper;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.world.level.Level;
 
-//Samples light from voxy's own voxel store - every LOD voxel carries sky+block light, making the
-//store a ready-made light cache for places far outside loaded chunks. Samples the voxel above the
-//given position (the air that carries the ambient light), walking up mip levels until data exists.
 public final class DistantLightSampler {
     public static final int FALLBACK = 15; //plain full skylight, block light 0
 

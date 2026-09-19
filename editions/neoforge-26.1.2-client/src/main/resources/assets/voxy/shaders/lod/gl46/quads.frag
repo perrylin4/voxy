@@ -90,6 +90,10 @@ bool useOriginalLeafHandoff() {
     return useBalancedLeafCutout() || ((interData.w >> 12u) & 1u) == 1u;
 }
 
+bool useCoarseFluidProxy() {
+    return ((interData.w >> 13u) & 1u) == 1u;
+}
+
 vec2 varyBalancedLeafUV(vec2 localUV, vec2 tile, out uint transform, out uint leafHash) {
     uvec2 tilePos = uvec2(max(tile, vec2(0.0f)));
     uint hash = interData.w >> 16u;
@@ -205,6 +209,10 @@ void main() {
         if ((leafTransform & 4u) != 0u) { dx.y = -dx.y; dy.y = -dy.y; }
         colour = textureGrad(blockModelAtlas, texPos, dx, dy);
         colour = clearTintMaskFromColour(colour);
+        if (useCoarseFluidProxy() && colour.a == 0.0f) {
+            vec2 faceCentre = getBaseUV() + vec2(0.5f) / (vec2(3.0f, 2.0f) * 256.0f);
+            colour = clearTintMaskFromColour(textureLod(blockModelAtlas, faceCentre, 0));
+        }
     }// else {
     //    colour = textureLod(blockModelAtlas, texPos, 0);
     //}

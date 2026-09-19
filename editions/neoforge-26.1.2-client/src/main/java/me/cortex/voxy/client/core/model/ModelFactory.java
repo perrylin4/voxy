@@ -61,6 +61,7 @@ public class ModelFactory {
    private final long bakeScratchBuffer = MemoryUtil.nmemAlloc(12288L);
    private final long[] metadataCache;
    private final int[] fluidStateLUT;
+   private final byte[] vanillaFluidKinds;
    private final int[] idMappings;
    private final Object2IntOpenHashMap<ModelFactory.ModelEntry> modelTexture2id = new Object2IntOpenHashMap();
    private final IntOpenHashSet blockStatesInFlight = new IntOpenHashSet();
@@ -83,6 +84,7 @@ public class ModelFactory {
       this.bakery2.setupTexture();
       this.metadataCache = new long[65536];
       this.fluidStateLUT = new int[65536];
+      this.vanillaFluidKinds = new byte[65536];
       this.idMappings = new int[1048576];
       Arrays.fill(this.idMappings, -1);
       Arrays.fill(this.fluidStateLUT, -1);
@@ -283,6 +285,10 @@ public class ModelFactory {
          } else {
             this.blockStatesInFlightLock.unlock();
             boolean isFluid = blockState.getBlock() instanceof LiquidBlock;
+            byte vanillaFluidKind = !isFluid ? 0
+               : blockState.getFluidState().is(FluidTags.WATER) ? (byte)1
+               : blockState.getFluidState().is(FluidTags.LAVA) ? (byte)2
+               : 0;
             int modelId = -1;
             int clientFluidStateId = -1;
             if (!isFluid && !blockState.getFluidState().isEmpty()) {
@@ -309,6 +315,9 @@ public class ModelFactory {
             int possibleDuplicate = this.modelTexture2id.getInt(entry);
             if (possibleDuplicate != -1) {
                this.idMappings[blockId] = possibleDuplicate;
+               if (vanillaFluidKind != 0) {
+                  this.vanillaFluidKinds[possibleDuplicate] = vanillaFluidKind;
+               }
                this.blockStatesInFlightLock.lock();
                if (!this.blockStatesInFlight.remove(blockId)) {
                   this.blockStatesInFlightLock.unlock();
@@ -322,6 +331,7 @@ public class ModelFactory {
                this.modelTexture2id.put(entry, modelId);
                if (isFluid) {
                   this.fluidStateLUT[modelId] = modelId;
+                  this.vanillaFluidKinds[modelId] = vanillaFluidKind;
                } else if (clientFluidStateId != -1) {
                   this.fluidStateLUT[modelId] = clientFluidStateId;
                }
@@ -399,6 +409,8 @@ public class ModelFactory {
                         occludesFace &= writeCount / 256.0F > 0.9;
                      }
 
+                     occludesFace &= faceCoversFullBlock;
+
                      long var54 = var53 | (occludesFace ? 1L : 0L);
                      fullyOpaque &= occludesFace;
                      boolean canBeOccluded = true;
@@ -430,7 +442,10 @@ public class ModelFactory {
 
                long var56 = var51 | (fullyOpaque ? 18014398509481984L : 0L);
                boolean canBeCorrectlyRendered = true;
+               FluidState fluidState = blockState.getFluidState();
+               int fluidHeight = isFluid ? Math.clamp(Math.round(fluidState.getOwnHeight() * 9.0F), 1, 9) : 0;
                long var57 = var56 | (long)getBlockLightEmission(blockState) << 55;
+               var57 |= (long)fluidHeight << 59;
                this.metadataCache[modelId] = var57;
                uploadPtr += 24L;
                int modelFlags = 0;
@@ -442,6 +457,7 @@ public class ModelFactory {
                modelFlags |= leafModel && VoxyConfig.CONFIG.getLeafLodMode() == VoxyConfig.LeafLodMode.BALANCED ? 32 : 0;
                modelFlags |= isFluid && blockState.getFluidState().is(FluidTags.LAVA) ? 64 : 0;
                modelFlags |= leafModel ? 128 : 0;
+               modelFlags |= fluidHeight << 8;
                MemoryUtil.memPutInt(uploadPtr, modelFlags);
                uploadPtr += 4L;
                if (tintSources == null) {
@@ -723,6 +739,10 @@ public class ModelFactory {
       } else {
          return map;
       }
+   }
+
+   public int getVanillaFluidKind(int clientId) {
+      return this.vanillaFluidKinds[clientId];
    }
 
    public final long getModelMetadataFromClientId(int clientId) {

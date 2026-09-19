@@ -31,7 +31,6 @@ void main() {
     //Transform ipos with respect to the vertex corner
     ivec3 pos = (((ipos<<detail)-baseSectionPos)<<5);
 
-    //TODO maybe make the size expansion 0.5 (or maybe get rid of it all together?)
     const float EXPANSION = 1.0f;
 
 
@@ -52,7 +51,7 @@ void main() {
 
     //Me when data race condition between visibilityData in the vert shader and frag shader
     uint previous = visibilityData[sid]&0x7fffffffu;
-    bool wasVisibleLastFrame = previous==(frameId-1);
+    bool wasVisibleLastFrame = previous==prevBuildFrameId;
     value = (frameId&0x7fffffffu)|(uint(wasVisibleLastFrame)<<31);//Encode if it was visible last frame
 }
 

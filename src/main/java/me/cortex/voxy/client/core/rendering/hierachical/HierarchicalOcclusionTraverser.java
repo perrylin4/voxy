@@ -31,7 +31,6 @@ import static org.lwjgl.opengl.GL42.glMemoryBarrier;
 import static org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BARRIER_BIT;
 import static org.lwjgl.opengl.GL45.*;
 
-// TODO: swap to persistent gpu threads instead of dispatching MAX_ITERATIONS of compute layers
 public class HierarchicalOcclusionTraverser {
     public static final boolean HIERARCHICAL_SHADER_DEBUG = System.getProperty("voxy.hierarchicalShaderDebug", "false").equals("true");
 
@@ -148,7 +147,6 @@ public class HierarchicalOcclusionTraverser {
             throw new IllegalStateException("Top level node count greater than capacity");
         }
 
-        //Use clear buffer, yes know is a bad idea, TODO: replace
         //Add the new top level node to the queue
         MemoryUtil.memPutInt(SCRATCH, id);
         nglClearNamedBufferSubData(this.topNodeIds.id, GL_R32UI, aid * 4L, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, SCRATCH);
@@ -199,12 +197,10 @@ public class HierarchicalOcclusionTraverser {
 
         viewport.section.getToAddress(ptr); ptr += 4*3;
 
-        //MemoryUtil.memPutFloat(ptr, viewport.width); ptr += 4;
         MemoryUtil.memPutInt(ptr, viewport.hiZBuffer.getPackedLevels()); ptr += 4;
 
         viewport.innerTranslation.getToAddress(ptr); ptr += 4*3;
 
-        //MemoryUtil.memPutFloat(ptr, viewport.height); ptr += 4;
 
         final float screenspaceAreaDecreasingSize = VoxyConfig.CONFIG.subDivisionSize*VoxyConfig.CONFIG.subDivisionSize;
         //Screen space size for descending
@@ -218,14 +214,13 @@ public class HierarchicalOcclusionTraverser {
         MemoryUtil.memPutInt(ptr, this.nodeCleaner.visibilityId); ptr += 4;
 
         {
-            final double TARGET_COUNT = 4000;//TODO: make this configurable, or at least dynamically computed based on throughput rate of mesh gen
+            final double TARGET_COUNT = 4000;
             double iFillness = Math.max(0, (TARGET_COUNT - this.meshGen.getTaskCount()) / TARGET_COUNT);
             iFillness = Math.pow(iFillness, 2);
             final int requestSize = (int) Math.ceil(iFillness * MAX_REQUEST_QUEUE_SIZE);
             MemoryUtil.memPutInt(ptr, Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestSize)));ptr += 4;
         }
 
-        //Put the render distance here so that it can generate a correct circle, TODO: make it not top level section sized
         MemoryUtil.memPutFloat(ptr, (float) Math.pow(VoxyConfig.CONFIG.sectionRenderDistance*16*32,2));ptr += 4;
 
         //Nodes inside vanilla render distance (+2 chunks) always subdivide to lvl0 so the seam ring
@@ -233,12 +228,6 @@ public class HierarchicalOcclusionTraverser {
         float fullDetailDist = (net.minecraft.client.Minecraft.getInstance().options.renderDistance().get() + 2) * 16f;
         MemoryUtil.memPutFloat(ptr, fullDetailDist*fullDetailDist);ptr += 4;
 
-        //Perspective-stretch compensation for the subdivision metric. Equal nodes project to LARGER
-        //areas at the screen edges than at the centre (planar-projection stretch, ~(1+tan^2)^1.5),
-        //so the area test starves the middle of the screen (centre mushy, edges sharp - worse at
-        //high FOV). The shader boosts each node's area by maxStretch/stretch(nodePos), lifting the
-        //centre to parity with the screen's most favourable position; edges get boost~1. These are
-        //the tan-space scale factors of the projection (1/P00, 1/P11).
         float p00 = Math.max(0.0001f, viewport.vanillaProjection.m00());
         float p11 = Math.max(0.0001f, viewport.vanillaProjection.m11());
         float invP00 = 1.0f / p00;
@@ -249,7 +238,11 @@ public class HierarchicalOcclusionTraverser {
         //shader divided into every node's stretch. Precompute it here so shouldDecend drops a per-node
         //pow() and just reads this uniform.
         MemoryUtil.memPutFloat(ptr, (float) Math.pow(1.0 + (double) invP00 * invP00 + (double) invP11 * invP11, 1.5));ptr += 4;
+        MemoryUtil.memPutInt(ptr, this.requestClock); ptr += 4;
     }
+
+    private int requestClock;
+    public void tickRequestClock() { this.requestClock++; }
 
     private void bindings(Viewport<?> viewport) {
         glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, this.queueMetaBuffer.id);
@@ -262,7 +255,6 @@ public class HierarchicalOcclusionTraverser {
 
     public void doTraversal(Viewport<?> viewport) {
         this.uploadUniform(viewport);
-        //UploadStream.INSTANCE.commit(); //Done inside traversal
 
         this.traversal.bind();
         this.bindings(viewport);
@@ -312,14 +304,7 @@ public class HierarchicalOcclusionTraverser {
         }
 
         int firstDispatchSize = (this.topNodeCount+(1<<LOCAL_WORK_SIZE_BITS)-1)>>LOCAL_WORK_SIZE_BITS;
-        /*
-        //prime the queue Todo: maybe move after the traversal? cause then it is more efficient work since it doesnt need to wait for this before starting?
-        glClearNamedBufferData(this.queueMetaBuffer.id, GL_RGBA32UI, GL_RGBA, GL_UNSIGNED_INT, new int[]{0,1,1,0});//Prime the metadata buffer, which also contains
-
-        //Set the first entry
-        glClearNamedBufferSubData(this.queueMetaBuffer.id, GL_RGBA32UI, 0, 16, GL_RGBA, GL_UNSIGNED_INT, new int[]{firstDispatchSize,1,1,initialQueueSize});
-         */
-        {//TODO:FIXME: THIS IS BULLSHIT BY INTEL need to fix the clearing
+        {
             long ptr = UploadStream.INSTANCE.upload(this.queueMetaBuffer, 0, 16*MAX_ITERATIONS);
             MemoryUtil.memPutInt(ptr +  0, firstDispatchSize);
             MemoryUtil.memPutInt(ptr +  4, 1);
@@ -344,7 +329,6 @@ public class HierarchicalOcclusionTraverser {
         //Dont need to use indirect to dispatch the first iteration
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT|GL_COMMAND_BARRIER_BIT|GL_BUFFER_UPDATE_BARRIER_BIT);
         if (firstDispatchSize!=0) {
-            //for some reason amd driver loves spitting out errors when its 0 (even tho it should just ignore it afak) so we do it ourselves
             glDispatchCompute(firstDispatchSize, 1,1);
         }
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT|GL_COMMAND_BARRIER_BIT);
@@ -383,14 +367,10 @@ public class HierarchicalOcclusionTraverser {
             //This should not break the synchonization between gpu and cpu as in the traversal shader is
             // `if (atomRes < REQUEST_QUEUE_SIZE) {` which forcefully clamps to the request size
 
-            //Logger.warn("Count over max buffer size, clamping, got count: " + count + ".");
 
             count = (int) ((this.requestBuffer.size()>>3)-1);
 
         }
-        //if (count > REQUEST_QUEUE_SIZE) {
-        //    Logger.warn("Count larger than 'maxRequestCount', overflow captured. Overflowed by " + (count-REQUEST_QUEUE_SIZE));
-        //}
         if (count != 0) {
             var buffer = new MemoryBuffer(count*8L+8).cpyFrom(ptr-8);
             // Never mutate the mapped download stream: it can still be owned by the GPU. Put the

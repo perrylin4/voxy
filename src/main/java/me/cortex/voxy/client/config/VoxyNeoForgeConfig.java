@@ -45,9 +45,8 @@ public class VoxyNeoForgeConfig {
             .defineInRange("serviceThreads", Math.max((int) (CpuLayout.getCoreCount() / 1.5), 1), 1, CpuLayout.getCoreCount());
 
     private static final ModConfigSpec.DoubleValue SUB_DIVISION_SIZE = BUILDER
-            .comment("Subdivision size for LOD rendering (28-256)",
-                     "Lower = more detailed LODs but more GPU load")
-            .defineInRange("subDivisionSize", 123.0, 28.0, 256.0);
+            .comment("Render precision presets: 1024, 768, 512, 256 (default), 123, 64, 28. Lower values give more detail.")
+            .defineInRange("subDivisionSize", 256.0, VoxyConfig.MIN_SUBDIVISION_SIZE, VoxyConfig.MAX_SUBDIVISION_SIZE);
 
     private static final ModConfigSpec.BooleanValue USE_ENVIRONMENTAL_FOG = BUILDER
             .comment("Apply environmental fog to LOD terrain")
@@ -159,6 +158,54 @@ public class VoxyNeoForgeConfig {
                      "distance so they stop floating over the LOD. Off = Create draws them natively.")
             .define("distantKinetics", true);
 
+    private static final ModConfigSpec.BooleanValue DISTANT_POWERGRID_WIRES = BUILDER
+            .comment("Render cached PowerGrid hanging wires beyond their entity tracking range")
+            .define("distantPowerGridWires", true);
+
+    private static final ModConfigSpec.IntValue DISTANT_POWERGRID_WIRE_MAX_CHUNKS = BUILDER
+            .comment("Maximum PowerGrid wire LOD distance in chunks. 0 follows Voxy's LOD radius.")
+            .defineInRange("distantPowerGridWireMaxChunks", 0, 0, 192);
+
+    private static final ModConfigSpec.BooleanValue DISTANT_COPYCATS = BUILDER
+            .comment("Render Create and Copycats+ camouflage blocks with dedicated LOD meshes")
+            .define("distantCopycats", true);
+
+    private static final ModConfigSpec.IntValue DISTANT_COPYCATS_MAX_CHUNKS = BUILDER
+            .comment("Maximum Copycats+ LOD distance in chunks. 0 follows Voxy's LOD radius.")
+            .defineInRange("distantCopycatsMaxChunks", 0, 0, 192);
+
+    private static final ModConfigSpec.BooleanValue DISTANT_SIMULATED_LASERS = BUILDER
+            .comment("Render Simulated laser-pointer beams beyond block-entity render distance")
+            .define("distantSimulatedLasers", true);
+
+    private static final ModConfigSpec.IntValue DISTANT_SIMULATED_LASER_MAX_CHUNKS = BUILDER
+            .comment("Maximum Simulated laser LOD distance in chunks. 0 follows Voxy's LOD radius.")
+            .defineInRange("distantSimulatedLaserMaxChunks", 0, 0, 192);
+
+    private static final ModConfigSpec.BooleanValue DISTANT_FRAMED_BLOCKS = BUILDER
+            .comment("Render FramedBlocks camouflaged models in the LOD")
+            .define("distantFramedBlocks", true);
+
+    private static final ModConfigSpec.IntValue DISTANT_FRAMED_BLOCKS_MAX_CHUNKS = BUILDER
+            .comment("Maximum FramedBlocks LOD distance in chunks. 0 follows Voxy's LOD radius.")
+            .defineInRange("distantFramedBlocksMaxChunks", 0, 0, 192);
+
+    private static final ModConfigSpec.BooleanValue DISTANT_LITTLETILES = BUILDER
+            .comment("Render cached LittleTiles microblock meshes beyond vanilla view distance")
+            .define("distantLittleTiles", true);
+
+    private static final ModConfigSpec.IntValue DISTANT_LITTLETILES_MAX_CHUNKS = BUILDER
+            .comment("Maximum LittleTiles LOD distance in chunks. 0 follows Voxy's LOD radius.")
+            .defineInRange("distantLittleTilesMaxChunks", 0, 0, 192);
+
+    private static final ModConfigSpec.BooleanValue DISTANT_DOMUM = BUILDER
+            .comment("Render detailed Domum Ornamentum models in the LOD")
+            .define("distantDomum", true);
+
+    private static final ModConfigSpec.IntValue DISTANT_DOMUM_MAX_CHUNKS = BUILDER
+            .comment("Maximum Domum Ornamentum LOD distance in chunks. 0 follows Voxy's LOD radius.")
+            .defineInRange("distantDomumMaxChunks", 0, 0, 192);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     private VoxyNeoForgeConfig() {
@@ -193,6 +240,18 @@ public class VoxyNeoForgeConfig {
         VoxyConfig.CONFIG.distantBeacons = DISTANT_BEACONS.get();
         VoxyConfig.CONFIG.distantBeaconMaxChunks = DISTANT_BEACON_MAX_CHUNKS.get();
         VoxyConfig.CONFIG.distantKinetics = DISTANT_KINETICS.get();
+        VoxyConfig.CONFIG.distantPowerGridWires = DISTANT_POWERGRID_WIRES.get();
+        VoxyConfig.CONFIG.distantPowerGridWireMaxChunks = DISTANT_POWERGRID_WIRE_MAX_CHUNKS.get();
+        VoxyConfig.CONFIG.distantCopycats = DISTANT_COPYCATS.get();
+        VoxyConfig.CONFIG.distantCopycatsMaxChunks = DISTANT_COPYCATS_MAX_CHUNKS.get();
+        VoxyConfig.CONFIG.distantSimulatedLasers = DISTANT_SIMULATED_LASERS.get();
+        VoxyConfig.CONFIG.distantSimulatedLaserMaxChunks = DISTANT_SIMULATED_LASER_MAX_CHUNKS.get();
+        VoxyConfig.CONFIG.distantFramedBlocks = DISTANT_FRAMED_BLOCKS.get();
+        VoxyConfig.CONFIG.distantFramedBlocksMaxChunks = DISTANT_FRAMED_BLOCKS_MAX_CHUNKS.get();
+        VoxyConfig.CONFIG.distantLittleTiles = DISTANT_LITTLETILES.get();
+        VoxyConfig.CONFIG.distantLittleTilesMaxChunks = DISTANT_LITTLETILES_MAX_CHUNKS.get();
+        VoxyConfig.CONFIG.distantDomum = DISTANT_DOMUM.get();
+        VoxyConfig.CONFIG.distantDomumMaxChunks = DISTANT_DOMUM_MAX_CHUNKS.get();
         VoxyConfig.CONFIG.enableFarPlayerRendering = ENABLE_FAR_PLAYER_RENDERING.get();
         VoxyConfig.CONFIG.enableFarVehicleRendering = ENABLE_FAR_VEHICLE_RENDERING.get();
         VoxyConfig.CONFIG.renderFarPlayerNames = RENDER_FAR_PLAYER_NAMES.get();
@@ -230,6 +289,18 @@ public class VoxyNeoForgeConfig {
         DISTANT_BEACONS.set(VoxyConfig.CONFIG.distantBeacons);
         DISTANT_BEACON_MAX_CHUNKS.set(VoxyConfig.CONFIG.distantBeaconMaxChunks);
         DISTANT_KINETICS.set(VoxyConfig.CONFIG.distantKinetics);
+        DISTANT_POWERGRID_WIRES.set(VoxyConfig.CONFIG.distantPowerGridWires);
+        DISTANT_POWERGRID_WIRE_MAX_CHUNKS.set(VoxyConfig.CONFIG.distantPowerGridWireMaxChunks);
+        DISTANT_COPYCATS.set(VoxyConfig.CONFIG.distantCopycats);
+        DISTANT_COPYCATS_MAX_CHUNKS.set(VoxyConfig.CONFIG.distantCopycatsMaxChunks);
+        DISTANT_SIMULATED_LASERS.set(VoxyConfig.CONFIG.distantSimulatedLasers);
+        DISTANT_SIMULATED_LASER_MAX_CHUNKS.set(VoxyConfig.CONFIG.distantSimulatedLaserMaxChunks);
+        DISTANT_FRAMED_BLOCKS.set(VoxyConfig.CONFIG.distantFramedBlocks);
+        DISTANT_FRAMED_BLOCKS_MAX_CHUNKS.set(VoxyConfig.CONFIG.distantFramedBlocksMaxChunks);
+        DISTANT_LITTLETILES.set(VoxyConfig.CONFIG.distantLittleTiles);
+        DISTANT_LITTLETILES_MAX_CHUNKS.set(VoxyConfig.CONFIG.distantLittleTilesMaxChunks);
+        DISTANT_DOMUM.set(VoxyConfig.CONFIG.distantDomum);
+        DISTANT_DOMUM_MAX_CHUNKS.set(VoxyConfig.CONFIG.distantDomumMaxChunks);
         ENABLE_FAR_PLAYER_RENDERING.set(VoxyConfig.CONFIG.enableFarPlayerRendering);
         ENABLE_FAR_VEHICLE_RENDERING.set(VoxyConfig.CONFIG.enableFarVehicleRendering);
         RENDER_FAR_PLAYER_NAMES.set(VoxyConfig.CONFIG.renderFarPlayerNames);

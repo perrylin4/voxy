@@ -56,6 +56,11 @@ public class VoxyClient {
 
             VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
 
+            if (me.cortex.voxy.client.core.compat.eclipticseasons.EsCompatGate.shouldArm()) {
+                me.cortex.voxy.client.core.compat.eclipticseasons.SeasonalLod.view =
+                        new me.cortex.voxy.client.core.compat.eclipticseasons.SeasonalMeshView();
+            }
+
             if (!Capabilities.INSTANCE.subgroup) {
                 Logger.warn("GPU does not support subgroup operations, expect some performance degradation");
             }

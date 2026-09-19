@@ -2,31 +2,17 @@ package me.cortex.voxy.client.compat.sable;
 
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
 import dev.ryanhcode.sable.sublevel.ClientSubLevel;
-import me.cortex.voxy.client.core.rendering.LodBoundaryFade;
+import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.joml.Vector3d;
 import org.joml.Vector4f;
 
-//Which pixels the depth shim actually has to bracket, for the sub-levels a pass is about to draw.
-//
-//Two reductions, and the first is the one that matters. The shim exists so LOD terrain can occlude
-//sub-level geometry, and LOD only ever draws beyond the point sodium stops. A sub-level lying wholly
-//inside the vanilla render distance therefore has no LOD anywhere in front of it - every LOD fragment
-//is further from the camera than the whole plot is - so merging LOD depth cannot change a single pixel
-//of it. Those pay nothing. What is left gets bounded to its screen extent rather than the full
-//viewport, which is most of the remaining cost for a ship that is small on screen.
 public final class SableScreenBounds {
     //Block models overhang their section (fences, banners, mounted blocks); grow the plot box before
     //using it so anything a section layer can rasterize stays inside the reported extent
     private static final double OVERHANG_BLOCKS = 2.0D;
     //A corner this close to the near plane projects to garbage - fall back rather than clip the pass
     private static final float NEAR_W_EPSILON = 1.0e-4f;
-    //Pulled in from where LOD can first appear before a plot counts as LOD-free. Sodium has not
-    //necessarily built every section it owns - an unbuilt one stays unmasked and voxy fills it, so
-    //while chunks stream in LOD can sit closer than any boundary computation says. This margin covers
-    //the ordinary case; right after a teleport or dimension change, where whole screens are unbuilt,
-    //a near ship can briefly fail to be occluded by the LOD standing in for terrain that has not
-    //meshed yet.
     private static final double LOD_FREE_MARGIN_BLOCKS = 64.0D;
 
     public static final float[] FULLSCREEN = {-1.0f, -1.0f, 1.0f, 1.0f};
@@ -109,10 +95,6 @@ public final class SableScreenBounds {
                 farthestSq = Math.max(farthestSq, dx * dx + dz * dz);
             }
 
-            //Every corner nearer than where LOD can start means the merge cannot change this plot - but
-            //it still has to be inside the rect. The rect clips everything the bracketed pass draws,
-            //and the pass draws the whole list: a near ship left out of it is a near ship scissored
-            //away, vanishing whenever a farther ship's projection happens not to cover it.
             if (farthestSq >= lodFreeRadiusSq) {
                 any = true;
             }
@@ -147,10 +129,7 @@ public final class SableScreenBounds {
 
     /** Radius within which no LOD geometry can appear, so nothing inside it needs depth merging. */
     public static double lodFreeRadiusBlocks() {
-        //Where LOD can first show up, not where the render distance nominally ends - with the boundary
-        //fade on, opaque LOD stops being masked at fadeStart, which is inset+buffer+fadeLength short of
-        //it. Reading the fade's own answer keeps this correct when that config changes; with the fade
-        //off it reports the render distance and this reduces to the plain radius.
-        return Math.max(0.0D, LodBoundaryFade.getDistances().fadeStart() - LOD_FREE_MARGIN_BLOCKS);
+        double vanillaReach = Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0D;
+        return Math.max(0.0D, vanillaReach - LOD_FREE_MARGIN_BLOCKS);
     }
 }

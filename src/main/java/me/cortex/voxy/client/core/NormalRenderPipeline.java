@@ -102,16 +102,6 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
     protected void finish(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
         this.finalBlit.bind();
 
-        //Inside a fluid the LOD has to wear vanilla's medium fog, not the ambient band. Vanilla stops
-        //drawing terrain at ~96 blocks underwater while the LOD takes over from the render distance
-        //outward, so an ambient band tuned for open air (it scales with the distance slider, and at a
-        //high setting starts thousands of blocks out) leaves a crystal-clear distant world hanging
-        //behind the fog wall.
-        //
-        //The values come from the fog RenderSystem holds during sodium's terrain pass - the same state
-        //ChunkShaderFogComponent hands the chunk shaders, so the LOD matches the terrain it borders
-        //exactly. Sampled live each frame there, not captured from FogRenderer.setupFog: that method is
-        //cancellable at HEAD and other mods do cancel it, so a capture hook never fires at all.
         float mediumNear = VoxyRenderSystem.getTerrainFogStartAtRender();
         float mediumFar = VoxyRenderSystem.getTerrainFogEndAtRender();
         var mc = net.minecraft.client.Minecraft.getInstance();

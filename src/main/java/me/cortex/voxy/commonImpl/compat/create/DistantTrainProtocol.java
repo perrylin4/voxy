@@ -15,16 +15,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-//Wire format for distant train rendering. Shapes are sent once per assembled carriage and cached by
-//id; poses stream at a low rate and are interpolated client side. Blocks travel as raw block-state
-//registry ids (registry sync keeps them consistent), so the client never touches Create classes.
 public final class DistantTrainProtocol {
     private DistantTrainProtocol() {}
 
-    //A block within a carriage, in contraption-local coordinates. Positions are packed as three
-    //signed bytes (carriages are far smaller than +-127 on any axis). renderNbt is the slice of
-    //the block entity's data a block needs to look right (copycat materials); empty for the
-    //overwhelming majority of blocks it costs one boolean on the wire.
     public record ShapeBlock(byte x, byte y, byte z, BlockState state, Optional<CompoundTag> renderNbt) {
         public ShapeBlock(byte x, byte y, byte z, BlockState state) {
             this(x, y, z, state, Optional.empty());
@@ -39,9 +32,6 @@ public final class DistantTrainProtocol {
                 ShapeBlock::new);
     }
 
-    //Static bogey description: which Create bogey style/size to draw and its data tag. The client
-    //resolves the style from Create's registry, so addon styles (Steam 'n' Rails, create_bb) work
-    //unmodified; the full tag travels along because some addon renderers read orientation from it.
     public record ShapeBogey(ResourceLocation styleId, ResourceLocation sizeId, float wheelRadius, CompoundTag data) {
         public static final StreamCodec<ByteBuf, ShapeBogey> CODEC = StreamCodec.composite(
                 ResourceLocation.STREAM_CODEC.cast(), ShapeBogey::styleId,
@@ -51,10 +41,6 @@ public final class DistantTrainProtocol {
                 ShapeBogey::new);
     }
 
-    //One carriage's block shape. shapeId is stable for the carriage's lifetime so the client can
-    //cache the baked mesh; the same id is referenced by every pose update. initialYaw is the
-    //assembly orientation (OrientedContraptionEntity.getInitialYaw) - contraption-local coordinates
-    //are only meaningful once rotated by it, exactly like applyLocalTransforms does.
     public record CarriageShapePayload(UUID trainId, int carriageIndex, long shapeId, float initialYaw, List<ShapeBlock> blocks, List<ShapeBogey> bogeys) implements CustomPacketPayload {
         public static final Type<CarriageShapePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath("voxy", "train_shape"));
         public static final StreamCodec<ByteBuf, CarriageShapePayload> CODEC = StreamCodec.composite(
@@ -72,9 +58,6 @@ public final class DistantTrainProtocol {
         }
     }
 
-    //World-space pose of one bogey. yaw/pitch follow CarriageBogey.updateAngles conventions (yaw is
-    //the negated track heading), so the client can feed them straight into Create's bogey transform.
-    //The anchor already carries the upside-down rail offset; the flag only drives the model roll.
     public record BogeyPose(double x, double y, double z, float yaw, float pitch, boolean upsideDown) {
         public static final StreamCodec<ByteBuf, BogeyPose> CODEC = StreamCodec.composite(
                 ByteBufCodecs.DOUBLE, BogeyPose::x,
@@ -86,9 +69,6 @@ public final class DistantTrainProtocol {
                 BogeyPose::new);
     }
 
-    //A single carriage pose sample in world space. Bogey poses align by index with the shape's bogey
-    //list; the list is empty while any bogey is off-graph (just assembled, mid portal, derailed).
-    //Hand-rolled codec - composite() caps at six fields.
     public record CarriagePose(int carriageIndex, long shapeId, double x, double y, double z, float yaw, float pitch, List<BogeyPose> bogeys) {
         private static final StreamCodec<ByteBuf, List<BogeyPose>> BOGEYS_CODEC = BogeyPose.CODEC.apply(ByteBufCodecs.list());
         public static final StreamCodec<ByteBuf, CarriagePose> CODEC = StreamCodec.of(

@@ -14,15 +14,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//Create's track BE force-renders bezier spans out to a hardcoded 192 blocks and, crucially, marks
-//itself shouldRenderOffScreen=true - so vanilla renders it from the globalBlockEntities list, which
-//never consults getViewDistance. voxy keeps those sections' data alive far past the vanilla view
-//distance, so the span persists; under a shader pack that excludes LOD from the vanilla depth
-//buffer it floats on top of all LOD ("pasted on the background"). The reliable choke point is the
-//actual render method: clamp there to the effective render distance (already min of client/server,
-//spherical) so the BE stops exactly where vanilla terrain does and the LOD copy owns everything
-//past it. getViewDistance is clamped too for the non-global BE path, but renderSafe is what bites.
-//Only while voxy is rendering LOD (the very thing keeping the sections alive); otherwise untouched.
 @Mixin(TrackRenderer.class)
 public class MixinTrackRenderer {
     private static boolean voxy$loggedClamp;

@@ -5,17 +5,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
-//Where voxy's time actually goes, by name, over a window the user opens deliberately.
-//
-//TimingStatistics already samples the render pipeline, but its samplers are named A..I and cover only
-//the phases inside the pipeline - which cannot answer the question that matters when a report says
-//"turned every integration off and it still drops frames", because the remaining suspects are ingest
-//and storage, on other threads entirely.
-//
-//Render thread and worker threads are reported separately and must not be added together: a millisecond
-//on the render thread is a millisecond of frame time, while a millisecond spread over four ingest
-//workers costs frames only through contention. Mixing them produces a number that looks alarming and
-//means nothing.
 public final class VoxyProfile {
     private VoxyProfile() {}
 
@@ -55,10 +44,6 @@ public final class VoxyProfile {
         }
     }
 
-    //GPU-side samples, kept apart from the CPU sections because they answer a different question. GPU
-    //work is submitted in microseconds and finishes whenever it finishes, so a pass that halves the
-    //frame rate leaves no CPU time behind - a profile that finds nothing on the CPU has not found
-    //nothing.
     private static final Map<String, Entry> GPU = new ConcurrentHashMap<>();
     private static volatile int gpuSamples;
 

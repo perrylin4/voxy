@@ -31,15 +31,7 @@ public final class DistantContraptionManager {
 
     public static final class Snapshot {
         CarriageMeshBaker.BakedCarriage mesh;
-        //The blocks the mesh was built from. Kept because nothing else keeps them: the entity is the
-        //only other copy and it is gone by the time the snapshot matters, and the mesh itself is an
-        //opaque VBO. Without this a snapshot can never be re-baked, only held or lost - which is what
-        //makes the resident set a one-way ratchet. About 12 bytes a block plus the state reference.
         Source source;
-        //Vertex bytes this snapshot's mesh took when it last had one. Kept across a drop so admission
-        //can ask whether rebuilding it would exceed the budget, rather than only whether there is room
-        //right now - the two differ by exactly the size of the thing being admitted, which is what made
-        //rebuild and evict chase each other every tick.
         long lastMeshBytes;
         //M_local from AbstractContraptionEntity.applyLocalTransforms; the world position is kept
         //separately as doubles so the draw can be camera-relative without float world-coord error.
@@ -49,10 +41,6 @@ public final class DistantContraptionManager {
         //box because bearing poses rotate freely; every distance test against x/y/z alone understates a
         //long structure by up to this much.
         double boundRadius;
-        //This entity type's tracking range in blocks. The presence cleanup may only trust "absent means
-        //gone" inside it, and the types differ a lot - plain contraptions 80, gantries 160, stationary
-        //320. Stored records carry it (store FORMAT 2); legacy records fall back to the default: 80 is
-        //the smallest, so the verdict stays sound for whichever type the record was.
         double trackingBlocks = 80.0;
         ResourceLocation dim;
         int lightPacked = -1;
@@ -60,29 +48,12 @@ public final class DistantContraptionManager {
         //Set once a bake ran on a non-empty contraption but produced no drawable mesh (all non-MODEL
         //blocks); stops the per-tick 64KB re-bake retry for structures that can never draw.
         boolean bakeGaveNothing;
-        //The entity's world position changed between the last two refreshes. An anchored contraption
-        //(bearing) freezes with only its angle stale; a translating one (gantry, piston, minecart
-        //mount) freezes at a position the real structure immediately leaves, and every packet about
-        //its later life - disassembly included - goes to the tracking clients it no longer has.
-        //Inside the render distance a frozen copy of a mover is wrong the moment it freezes, standing
-        //misplaced over loaded terrain; the renderer draws it only past the render distance, where a
-        //leave-behind is the only information there is.
         boolean movedWhileSeen;
         long remoteUpdatedAtNanos;
         //Network id of the entity behind the last refresh, for the renderer's frame-time lookup -
         //Level.getEntity(int) is the public O(1) path; the UUID re-check guards against id reuse
         int entityId = -1;
-        //The entity appeared in entitiesForRendering this tick. Manager-side state only: the unseen
-        //transition is when the record is written to storage. The renderer's yield samples entity
-        //presence per frame instead (trackedEntity) - add/remove drains on the frame task queue, and
-        //a tick-stale answer doubles or blanks the structure for several frames at every tracking
-        //crossing.
         volatile boolean live;
-        //Gantry rail identity: the movement axis plus the entity's two perpendicular coordinates. A
-        //ghost's body sphere only meets a live crane's when the two poses overlap, but every pose of
-        //one gantry shares its rail - matching on the rail reaches ghosts anywhere along the travel
-        //line. -1 = not a gantry. Never persisted: a restored record has no entity to vouch that the
-        //rail still belongs to the same structure.
         int railAxis = -1;
         double railU, railV;
 
@@ -118,13 +89,6 @@ public final class DistantContraptionManager {
     //Diagnostics for /voxy debug trains
     public static volatile int snapshotCount;
 
-    //Refresh the snapshot of every loaded contraption within the LOD radius, whatever its distance.
-    //Chunks load in a horizontal cylinder (full world height) while rendering culls to a sphere, so a
-    //contraption straight down a deep mine is still LOADED and its motion is live even though it is
-    //past the render distance - that one keeps animating in the LOD. A contraption whose chunk unloads
-    //(the player walked away horizontally) simply drops out of entitiesForRendering, so its snapshot
-    //stops refreshing and freezes at the last pose. Only bounded by the LOD radius (past it we never
-    //draw). Runs on the client tick - applyLocalTransforms only reads entity state, no render context.
     public static void update(ClientLevel level, double camX, double camY, double camZ, double maxDist) {
         if (!VoxyConfig.CONFIG.isRenderingEnabled() || !VoxyConfig.CONFIG.distantContraptions) {
             if (!SNAPSHOTS.isEmpty()) {
@@ -146,20 +110,9 @@ public final class DistantContraptionManager {
                 continue;
             }
             seenThisTick.add(ce.getUUID());
-            //Trains (CarriageContraptionEntity, a subclass of OrientedContraptionEntity) have their own
-            //dedicated remote-LOD path - DistantTrainRenderer + the server-side CreateTrainSampler that
-            //streams their poses even through unloaded chunks. Snapshotting them here too would double-
-            //draw and leave a frozen ghost where a train drove past. Non-train contraptions
-            //(bearings/gantries/pistons/minecart-mounted OrientedContraptionEntity) still belong here.
             if (ce instanceof CarriageContraptionEntity) {
                 continue;
             }
-            //A contraption riding a sable ship is stored at plot-grid coordinates and only moved onto the
-            //ship at render time, so a snapshot of it would be drawn ~2e7 blocks out. Sable renders it.
-            //The raw coordinate check stays even if the gate misreads - during a teleport the gate's
-            //container lookup can land on a tick where it answers false, and one such tick is enough to
-            //mint a snapshot with a plot anchor and a ship-rebase pose, a structure that later draws
-            //thousands of blocks from anywhere it ever stood.
             if (Math.abs(ce.getX()) > 1.0e6 || Math.abs(ce.getZ()) > 1.0e6
                     || me.cortex.voxy.client.compat.ShipBorne.isShipBorne(ce.getX(), ce.getZ())) {
                 continue;
@@ -175,15 +128,8 @@ public final class DistantContraptionManager {
             }
             var snap = SNAPSHOTS.computeIfAbsent(ce.getUUID(), k -> new Snapshot());
             snap.trackingBlocks = ce.getType().clientTrackingRange() * 16.0;
-            //Tracked this tick. Feeds the unload-tick save gate and shields the mesh from GPU-budget
-            //eviction; render-time visibility is the renderer's per-frame call (hiddenThisFrame), not
-            //this flag - an EC-hidden entity's stand-in must keep its mesh resident to draw at all.
             snap.live = true;
             if (snap.mesh == null && !snap.bakeGaveNothing) {
-                //A contraption first seen from afar often has no block data yet (the NBT arrives after
-                //the entity), so keep retrying while it is empty. But once it has blocks and the bake
-                //still produced no mesh (a structure of purely non-MODEL blocks), stop - re-baking a
-                //64KB native buffer every tick forever for a snapshot that can never draw was pure waste.
                 if (!contraption.getBlocks().isEmpty()) {
                     var collected = collectBlocks(contraption);
                     snap.mesh = bakeBlocks(collected);
@@ -195,12 +141,6 @@ public final class DistantContraptionManager {
                 me.cortex.voxy.commonImpl.PerfStats.contraptionRebakeSkipped.increment();
             }
             if (snap.mesh == null) {
-                //Bookkeeping runs while the mesh is pending: the motion test needs two positions from
-                //consecutive ticks, so a structure that is only tracked for the few ticks its blocks
-                //take to arrive has no warm window at the first refresh that can use one - and a
-                //mid-travel freeze that reads as parked is the one record the save gate exists to
-                //block. Only the pose stays behind (there is nothing to draw yet); a radius-0 body
-                //still supersedes ghosts whose own boundRadius covers the contact.
                 trackMotion(ce, snap, now);
                 snap.x = ce.getX();
                 snap.y = ce.getY();
@@ -217,11 +157,6 @@ public final class DistantContraptionManager {
             try {
                 ce.applyLocalTransforms(SCRATCH_POSE, 1.0f);
                 var pose = SCRATCH_POSE.last().pose();
-                //A structure-local pose translates by at most its own extent. A plot-scale translation
-                //means something rebased this entity between spaces mid-capture (sable moves ship
-                //content from plot coordinates onto the ship at render time, and a teleport can land a
-                //tick where the ship gate misreads) - drawn at the entity's world position, that matrix
-                //puts the structure thousands of blocks from where it belongs. Keep the previous pose.
                 if (Math.abs(pose.m30()) < 100_000f && Math.abs(pose.m31()) < 100_000f
                         && Math.abs(pose.m32()) < 100_000f) {
                     snap.local.set(pose);
@@ -248,7 +183,6 @@ public final class DistantContraptionManager {
             if (!seenThisTick.contains(entry.getKey())) {
                 var snap = entry.getValue();
                 //The tick it stops being live is the tick its pose stops changing, so that is when the
-                //record is worth writing. A pose frozen mid-travel is not worth keeping: it is wrong
                 //already and the structure mints a fresh record when it is next seen.
                 if (snap.live && !snap.movedWhileSeen && storage != null) {
                     ContraptionStore.save(storage, entry.getKey(), snap);
@@ -257,20 +191,6 @@ public final class DistantContraptionManager {
             }
         }
 
-        //A live contraption whose body overlaps a different snapshot's body supersedes it. Gantries
-        //and pistons mint a new entity UUID on every assembly, so the old record over the same travel
-        //line can only be this structure's previous life - and no cleanup path reaches it from here:
-        //the disassembly packet went to tracking clients it no longer had, disassembledInPlace samples
-        //the ghost's stale positions rather than where the blocks really returned, and presence needs
-        //the player next to the stale anchor. The 2s guard is the same entity-sync grace as below, so
-        //a tracked neighbour whose sync hiccups a tick beside another live structure is not deleted.
-        //A wrong hit costs a snapshot the next approach re-mints; storage goes with it (removeDead) or
-        //the ghost returns on the next world entry.
-        //Rail identity reaches where body overlap cannot: a gantry ghost frozen mid-travel sits
-        //anywhere along the line, usually nowhere near where the live crane happens to be right now,
-        //and past the tracking range the overlap is geometrically impossible. Mid-travel poses are
-        //never persisted, so a moved ghost on a live crane's rail can only be a previous life (or a
-        //second carriage's equally-wrong mid-travel freeze, which re-mints on the next approach).
         if (!liveBodies.isEmpty() || !liveRails.isEmpty()) {
             for (var entry : SNAPSHOTS.entrySet()) {
                 var s = entry.getValue();
@@ -304,20 +224,6 @@ public final class DistantContraptionManager {
 
         bakeDormant(camX, camY, camZ, maxDist);
 
-        //Leave-behinds are permanent while far away: the entity drops off the client at the server's
-        //entity tracking range, far inside the LOD radius, so any time-based expiry deletes the
-        //snapshot long before the player is far enough to look back at it. Cleanup is presence-based
-        //instead: within the radius where this entity type would certainly be tracked, a snapshot whose
-        //entity did not appear this tick no longer exists (disassembled/removed). The radius is the
-        //type's own tracking range - a flat few dozen blocks left bearing structures undeletable from
-        //anywhere but right next to the anchor. Clamped inside the render distance, past which even a
-        //tracked entity is not guaranteed to be sent.
-        //
-        //The anchor is a single point and the structure reaches boundRadius past it, so a player next
-        //to the far end of a long ghost can be well outside the anchor's tracking radius - where entity
-        //absence proves nothing, since a live entity would not be tracked from here either. There the
-        //blocks themselves answer: a structure disassembled in place stands as real world blocks
-        //exactly where the ghost draws them, and sampling the ghost against the level settles it.
         double reach = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0;
         SNAPSHOTS.entrySet().removeIf(entry -> {
             var s = entry.getValue();
@@ -353,9 +259,6 @@ public final class DistantContraptionManager {
             if (now - s.lastSeenMs < 2000) {
                 return false;
             }
-            //Presence is only proof where the client also has block data: with the render distance
-            //past the server's view distance, a snapshot can sit within the presence radius while its
-            //chunk was never sent - entity absence there says nothing about the blocks.
             if (!level.isLoaded(net.minecraft.core.BlockPos.containing(s.x, s.y, s.z))) {
                 return false;
             }
@@ -370,14 +273,6 @@ public final class DistantContraptionManager {
             return true;
         });
 
-        //An upper bound the presence check cannot provide. Presence only fires within a few dozen blocks,
-        //so a snapshot the player leaves behind and never walks back to is kept for the whole session -
-        //and one left in another dimension is kept forever, since the renderer skips it on dim and the
-        //check above never looks at dim either. Both cost the same VBO as a visible one.
-        //
-        //This is an addition to the presence check, not a replacement: a time-based expiry would delete
-        //legitimate snapshots long before the player is far enough away to look back at them, which is
-        //why there is none. Distance is safe because anything past the render radius is not drawn.
         SNAPSHOTS.entrySet().removeIf(entry -> {
             var s = entry.getValue();
             if (seenThisTick.contains(entry.getKey())) {
@@ -396,9 +291,6 @@ public final class DistantContraptionManager {
             }
             double sx = s.x - camX, sy = s.y - camY, sz = s.z - camZ;
             if ((sx * sx + sy * sy + sz * sz) > evictDistSq) {
-                //Only the mesh. The block list it was built from is a few kilobytes against a few
-                //hundred for the mesh, and keeping it is what lets the structure come back on approach
-                //rather than waiting for the next world load to read it off disk again.
                 dropMesh(s);
             }
             return false;
@@ -409,6 +301,7 @@ public final class DistantContraptionManager {
     }
 
     public static void handleRemotePoses(ContraptionPosesPayload payload) {
+        if (!me.cortex.voxy.client.ServerCapabilities.supports(ContraptionPosesPayload.TYPE)) return;
         long now = System.nanoTime();
         for (ContraptionPose pose : payload.poses()) {
             REMOTE_POSES.compute(pose.id(), (id, track) -> {
@@ -466,11 +359,6 @@ public final class DistantContraptionManager {
                 && nowNanos - snap.remoteUpdatedAtNanos <= REMOTE_TIMEOUT_NANOS;
     }
 
-    //Consecutive-refresh difference when the window is warm; across a gap the stored position is old
-    //and the difference measures the gap, not motion, so the entity's own last-tick position seeds the
-    //flag instead - a mover sighted for a single tick must still count as moving, or its mid-travel
-    //pose reaches the disk. Parked entities sync bit-identical positions, so the epsilon only has to
-    //clear float dust.
     private static void trackMotion(AbstractContraptionEntity ce, Snapshot snap, long now) {
         double mx, my, mz;
         if (now - snap.lastSeenMs < 150) {
@@ -485,9 +373,6 @@ public final class DistantContraptionManager {
         snap.movedWhileSeen = mx * mx + my * my + mz * mz > 1.0e-9;
     }
 
-    //Rail identity for gantries: the movement axis plus the entity's two perpendicular coordinates.
-    //Same-rail poses differ only along the axis, and adjacent parallel rails are a full block apart,
-    //so a half-block tolerance separates them cleanly.
     private static void recordRail(AbstractContraptionEntity ce, Snapshot snap, List<double[]> liveRails) {
         if (!(ce instanceof com.simibubi.create.content.contraptions.gantry.GantryContraptionEntity)) {
             return;
@@ -505,11 +390,10 @@ public final class DistantContraptionManager {
         liveRails.add(new double[]{axis.ordinal(), u, v});
     }
 
-    //Everything a bake consumes, kept together because both halves come out of the same walk over the
-    //contraption and both are needed to reproduce it - the copycat model data is read from block entity
-    //nbt that goes away with the entity.
+    //ModelData serves the live bake; renderNbt preserves copycat materials across reloads.
     public record Source(List<ShapeBlock> blocks,
-                         Map<BlockPos, net.neoforged.neoforge.client.model.data.ModelData> modelData) {
+                         Map<BlockPos, net.neoforged.neoforge.client.model.data.ModelData> modelData,
+                         Map<BlockPos, net.minecraft.nbt.CompoundTag> renderNbt) {
         public int blockCount() {
             return this.blocks.size();
         }
@@ -529,12 +413,6 @@ public final class DistantContraptionManager {
         return Math.sqrt(furthestSq);
     }
 
-    //Is this snapshot standing over its own blocks, placed back into the world? Disassembly returns
-    //the structure's blocks to the level in the same pose the ghost draws, so a strong majority of
-    //exact state matches at the ghost's own positions is its signature. Air says nothing - a live
-    //structure's blocks ride the entity and leave air behind them - so only conclusive samples count,
-    //and doubt keeps the snapshot: a lingering ghost is a wrong image, a deleted live structure is a
-    //hole where something real stands.
     private static boolean disassembledInPlace(ClientLevel level, Snapshot s) {
         var source = s.source;
         if (source == null || source.blocks().isEmpty()) {
@@ -572,6 +450,7 @@ public final class DistantContraptionManager {
     private static Source collectBlocks(Contraption contraption) {
         List<ShapeBlock> blocks = new ArrayList<>();
         Map<BlockPos, net.neoforged.neoforge.client.model.data.ModelData> blockEntityData = null;
+        Map<BlockPos, net.minecraft.nbt.CompoundTag> renderNbt = null;
         for (var entry : contraption.getBlocks().entrySet()) {
             BlockPos pos = entry.getKey();
             var state = entry.getValue().state();
@@ -583,16 +462,22 @@ public final class DistantContraptionManager {
             }
             blocks.add(new ShapeBlock((byte) pos.getX(), (byte) pos.getY(), (byte) pos.getZ(), state));
             //Copycat looks live in the captured block entity nbt, not the state
+            var copycatNbt = me.cortex.voxy.commonImpl.compat.CopycatCommon
+                    .renderNbt(state, entry.getValue().nbt());
             var copycatData = me.cortex.voxy.commonImpl.compat.CreateCopycatCompat
-                    .materialFromContraptionNbt(state, entry.getValue().nbt());
+                    .materialFromContraptionNbt(state, copycatNbt);
             if (copycatData != null) {
                 if (blockEntityData == null) {
                     blockEntityData = new HashMap<>();
                 }
                 blockEntityData.put(pos, copycatData);
             }
+            if (copycatNbt != null) {
+                if (renderNbt == null) renderNbt = new HashMap<>();
+                renderNbt.put(pos, copycatNbt);
+            }
         }
-        return new Source(blocks, blockEntityData);
+        return new Source(blocks, blockEntityData, renderNbt);
     }
 
     private static CarriageMeshBaker.BakedCarriage bakeBlocks(Source source) {
@@ -605,10 +490,6 @@ public final class DistantContraptionManager {
         return engine == null ? null : engine.storage;
     }
 
-    //Which dimension's records have been read. Reading is driven from the tick rather than a level
-    //event because it needs voxy's world engine for the dimension to exist, and nothing guarantees that
-    //has happened by the time a level load fires - a miss there would leave the feature silently doing
-    //nothing, which is indistinguishable from having stored nothing.
     private static ResourceLocation loadedFor;
 
     private static void loadStoredOnce(ClientLevel level) {
@@ -637,15 +518,9 @@ public final class DistantContraptionManager {
             if (!here.equals(entry.dim()) || SNAPSHOTS.containsKey(entry.id())) {
                 continue;
             }
-            //A plot-scale anchor is a ship-borne capture that slipped through a gate misread; drawn
-            //where it says, it lands thousands of blocks from anything real. Records already written
-            //that way stay dead on disk rather than coming back every world entry.
             if (Math.abs(entry.x()) > 1.0e6 || Math.abs(entry.z()) > 1.0e6) {
                 continue;
             }
-            //Dormant: it knows what it is made of and where it stood, and nothing has been uploaded for
-            //it yet. The same pass that rebuilds an evicted snapshot picks these up, nearest first, so
-            //there is one path for "came back into range" and "was just read off disk".
             var snap = new Snapshot();
             snap.source = entry.source();
             snap.boundRadius = boundRadiusOf(entry.source());
@@ -683,10 +558,6 @@ public final class DistantContraptionManager {
         return snap.mesh == null && snap.source != null && !snap.bakeGaveNothing;
     }
 
-    //Vertex memory is the bound that matters - one dense structure can hold as much as a hundred small
-    //ones at the same distance, so a distance cap alone says nothing about what is actually held.
-    //Furthest first, because that is the one whose absence is least likely to be noticed and the one
-    //least likely to be wanted back soon.
     private static void enforceGpuBudget(double camX, double camY, double camZ) {
         long budget = (long) VoxyConfig.CONFIG.distantContraptionGpuBudgetMiB * 1024L * 1024L;
         if (budget <= 0) {
@@ -757,10 +628,6 @@ public final class DistantContraptionManager {
             if (nearest == null) {
                 return;
             }
-            //Would rebuilding it overflow the budget? Asking whether there is room now instead admits a
-            //mesh that immediately puts the total over, the eviction pass takes it straight back out,
-            //and the two repeat every tick - a full bake and buffer upload, twenty times a second.
-            //A snapshot never yet baked has no size to check, so it is admitted and measured.
             if (budget > 0 && nearest.lastMeshBytes > 0
                     && residentGpuBytes + nearest.lastMeshBytes > budget) {
                 tooBig.add(nearest);
@@ -774,9 +641,6 @@ public final class DistantContraptionManager {
             nearest.mesh = mesh;
             nearest.lastMeshBytes = mesh.mesh.gpuByteSize();
             if (nearest.lightPacked < 0) {
-                //Sampled rather than stored: the sampler reads voxy's own voxel store, so it answers for
-                //an unloaded chunk, and a value taken now matches the terrain it will be drawn against.
-                //-1 is also the "never refreshed" sentinel the freeze logic reads, so it has to go.
                 var mc = Minecraft.getInstance();
                 if (mc.level != null) {
                     nearest.lightPacked = DistantLightSampler.samplePeek(mc.level,
@@ -793,10 +657,6 @@ public final class DistantContraptionManager {
 
     private static volatile long residentGpuBytes;
 
-    //Frame-accurate presence for the renderer's yield: the entity behind this snapshot, if it is in
-    //the level right now. Entity add/remove drains on the per-frame task queue, read here at draw
-    //time - the same values the entity renderer acts on this frame. Hiddenness is the caller's
-    //separate question (hiddenThisFrame): present-but-hidden and absent lead to different verdicts.
     public static net.minecraft.world.entity.Entity trackedEntity(UUID id, Snapshot snap) {
         if (snap.entityId < 0) {
             return null;
@@ -809,11 +669,6 @@ public final class DistantContraptionManager {
         return entity != null && id.equals(entity.getUUID()) && !entity.isRemoved() ? entity : null;
     }
 
-    //EntityCulling cancels the vanilla entity pass, and nowheel bridges the verdict to Flywheel by
-    //deleting the culled entity's visual outright and blocking re-creation while the cull holds - so
-    //backend-on does not mean the body draws. Hidden = EC says culled AND no pipeline is left
-    //holding geometry: backend-off means the EC-cancelled vanilla pass was the only owner, and
-    //backend-on counts only while a visual object actually exists.
     public static boolean hiddenThisFrame(net.minecraft.world.entity.Entity entity) {
         if (!NowheelCulled.isCulled(entity)) {
             return false;
@@ -828,11 +683,6 @@ public final class DistantContraptionManager {
         return SNAPSHOTS;
     }
 
-    //Disassembly observed while the blocks land beyond the client's chunk data: deleting the snapshot
-    //leaves nothing at all in the LOD - the placed blocks never reach this client, and voxy's stored
-    //terrain predates them. Keep the copy as a leave-behind at the final resting pose instead (the
-    //packet is processed before the entity discard, so this pose is where the blocks really landed);
-    //presence and in-place sampling reap it against the real blocks on the next approach.
     public static void retireToLeaveBehind(AbstractContraptionEntity ce) {
         var snap = SNAPSHOTS.get(ce.getUUID());
         if (snap == null) {
@@ -871,9 +721,6 @@ public final class DistantContraptionManager {
         if (snap != null && snap.mesh != null) {
             snap.mesh.close();
         }
-        //And out of storage, or the next world entry restores a structure that was taken apart. Every
-        //removal that means "gone" deletes its record - this one, presence, in-place disassembly - as
-        //opposed to the distance checks, which only mean "not drawn from here" and keep it.
         var level = Minecraft.getInstance().level;
         if (level != null) {
             var storage = storageFor(level);

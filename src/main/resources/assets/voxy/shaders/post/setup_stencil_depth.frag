@@ -52,10 +52,6 @@ void main() {
                    sourceDepth * depthRemap.z + depthRemap.w, 1.0);
     cameraRelative.xyz /= cameraRelative.w;
 
-    // Sodium's section visibility is bounded in camera space, not by an infinitely tall X/Z
-    // cylinder.  Using only X/Z here cuts a full-radius hole out of LOD even when the terrain is far
-    // below the camera and vanilla no longer renders it.  A 3-D radius keeps the familiar circular
-    // handoff near the ground, while naturally shrinking its ground footprint as the player climbs.
     float boundaryDistance = length(cameraRelative.xyz);
     float lodCoverage = 0.0;
     float ditherValue = 1.0;

@@ -77,6 +77,7 @@ public class VoxyClientInstance extends VoxyInstance {
         super.shutdown();
         //Free the render resources cache since the entire instance is freed
         RenderResourceReuse.clearResources();
+        me.cortex.voxy.common.world.WorldSection.trimArrayPool(me.cortex.voxy.common.world.WorldSection.DEFAULT_ARRAY_POOL_ARRAYS);
     }
 
     private static class Config {

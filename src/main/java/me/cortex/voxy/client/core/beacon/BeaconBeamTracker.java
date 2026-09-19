@@ -9,14 +9,6 @@ import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldSection;
 import net.minecraft.core.BlockPos;
 
-//Which beacons a section change can affect. A beam is a pure function of the level-0 voxels in its
-//column plus index membership, so between those two signals - the engine's section-dirty callback and
-//the index's membership diff - a beam that never gets marked here never needs re-solving.
-//
-//onSectionDirty runs inside markDirty on the ingest workers: it may take one volatile read, one map
-//probe and a few compares, nothing more, or it backpressures ingest. The column map is therefore an
-//immutable snapshot swapped on membership change (rare), and only the small dirty/removed sets take a
-//lock.
 public final class BeaconBeamTracker {
     //32-block column key of a level-0 section
     private static long columnKey(int sx, int sz) {

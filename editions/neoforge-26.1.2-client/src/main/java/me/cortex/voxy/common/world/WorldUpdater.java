@@ -20,7 +20,7 @@ public class WorldUpdater {
                previousSection = null;
             }
 
-            long status = insertSectionLvlIntoWorld(section, worldSection);
+            long status = insertSectionLvlIntoWorld(into, section, worldSection);
             boolean didStateChange = (status & 1L) == 1L;
             int airCount = (int)(status >> 1 & 8191L);
             if (lvl == 0) {
@@ -66,7 +66,7 @@ public class WorldUpdater {
       }
    }
 
-   private static long insertSectionLvlIntoWorld(VoxelizedSection section, WorldSection worldSection) {
+   private static long insertSectionLvlIntoWorld(WorldEngine into, VoxelizedSection section, WorldSection worldSection) {
       long[] vdat = section.section;
       int lvl = worldSection.lvl;
       int msk = (1 << lvl + 1) - 1;
@@ -75,6 +75,8 @@ public class WorldUpdater {
       int bz = (section.z & msk) << 4 - lvl;
       int airCount = 0;
       boolean didStateChange = false;
+      WorldSection belowWorldSection = null;
+      boolean belowDidStateChange = false;
       long[] secD = worldSection.data;
       int baseSec = bx | bz << 5 | by << 10;
       if (lvl == 0) {
@@ -113,10 +115,42 @@ public class WorldUpdater {
             int cSecIdx = secIdx + baseSec;
             secIdx = secIdx + iSecMsk1 & secMsk;
             long newId = vdat[i];
+            if (Mapper.isSurfaceCarrier(newId)) {
+               if ((cSecIdx >> 10 & 31) != 0 && !Mapper.isAir(secD[cSecIdx - 1024])) {
+                  int belowIndex = cSecIdx - 1024;
+                  long below = Mapper.applySurfaceCarrier(secD[belowIndex], newId);
+                  didStateChange |= below != secD[belowIndex];
+                  secD[belowIndex] = below;
+                  newId = Mapper.clearSurfaceCarrier(newId);
+               } else if ((cSecIdx >> 10 & 31) == 0) {
+                  if (belowWorldSection == null) {
+                     belowWorldSection = into.acquire(lvl, worldSection.x, worldSection.y - 1, worldSection.z);
+                  }
+                  int belowIndex = 31744 | cSecIdx & 1023;
+                  long oldBelow = belowWorldSection.data[belowIndex];
+                  if (!Mapper.isAir(oldBelow)) {
+                     long below = Mapper.applySurfaceCarrier(oldBelow, newId);
+                     belowDidStateChange |= below != oldBelow;
+                     belowWorldSection.data[belowIndex] = below;
+                     newId = Mapper.clearSurfaceCarrier(newId);
+                  } else {
+                     newId = Mapper.restoreSurfaceCarrier(newId);
+                  }
+               } else {
+                  newId = Mapper.restoreSurfaceCarrier(newId);
+               }
+            }
             long oldId = secD[cSecIdx];
             didStateChange |= newId != oldId;
             secD[cSecIdx] = newId;
          }
+      }
+
+      if (belowWorldSection != null) {
+         if (belowDidStateChange) {
+            into.markDirty(belowWorldSection, 1, 2);
+         }
+         belowWorldSection.release();
       }
 
       long status = 0L;

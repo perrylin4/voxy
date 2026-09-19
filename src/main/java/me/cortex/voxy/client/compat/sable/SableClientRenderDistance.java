@@ -16,10 +16,10 @@ public final class SableClientRenderDistance {
             return vanillaRenderDistanceChunks;
         }
 
-        return SableContraptionRenderDistance.extendVanillaRenderDistanceChunks(
+        return SableContraptionRenderDistance.resolveRenderDistanceChunks(
                 vanillaRenderDistanceChunks,
                 VoxyConfig.CONFIG.sectionRenderDistance,
-                VoxyConfig.CONFIG.simulatedContraptionRenderDistancePercent
+                VoxyConfig.CONFIG.aeronauticsContraptionMaxChunks
         );
     }
 
@@ -28,7 +28,6 @@ public final class SableClientRenderDistance {
     }
 
     public static boolean isVoxyRenderDistanceActive() {
-        return VoxyConfig.CONFIG.isRenderingEnabled() && VoxyConfig.CONFIG.sableLodRendering
-                && VoxyConfig.CONFIG.simulatedContraptionRenderDistancePercent > 0;
+        return VoxyConfig.CONFIG.isRenderingEnabled() && VoxyConfig.CONFIG.sableLodRendering;
     }
 }

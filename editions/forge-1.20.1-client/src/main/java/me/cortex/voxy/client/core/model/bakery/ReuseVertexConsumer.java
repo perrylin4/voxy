@@ -86,6 +86,7 @@ public final class ReuseVertexConsumer implements VertexConsumer {
 
     @Override
     public ReuseVertexConsumer color(int i) {
+        i = normalizeAbgr(i);
         if (this.vertexAlphaOnly) {
             i = (i & 0xFF000000) | 0x00FFFFFF;
         }
@@ -143,9 +144,16 @@ public final class ReuseVertexConsumer implements VertexConsumer {
 
     public ReuseVertexConsumer quad(BakedQuad quad, boolean forceSolid, RenderType layer) {
         int meta = 0;
-        meta |= forceSolid?0:(layer!=RenderType.solid() || spriteHasTransparency(quad)?1:0);//has discard
+        meta |= shouldEnableAlphaDiscard(quad, forceSolid, layer) ? 1 : 0;
         meta |= quad.isTinted()?4:0;//has tinting
         return this.quad(quad, meta);
+    }
+
+    private static boolean shouldEnableAlphaDiscard(BakedQuad quad, boolean forceSolid, RenderType layer) {
+        if (forceSolid || layer == RenderType.translucent()) {
+            return false;
+        }
+        return layer != RenderType.solid() || spriteHasTransparency(quad);
     }
 
     /**
@@ -185,12 +193,28 @@ public final class ReuseVertexConsumer implements VertexConsumer {
             // look at FaceBakery
             int j = i * 8;
             this.vertex(Float.intBitsToFloat(vertices[j]), Float.intBitsToFloat(vertices[j + 1]), Float.intBitsToFloat(vertices[j + 2]));
-            this.color(vertices[j + 3]);
+            this.color(normalizeAbgr(vertices[j + 3]));
             this.uv(Float.intBitsToFloat(vertices[j + 4]), Float.intBitsToFloat(vertices[j + 5]));
 
             this.meta(metadata|this.globalOrMetadata);
         }
         return this;
+    }
+
+    /**
+     * Several Forge baked-model implementations leave the vertex alpha byte at
+     * zero when no vertex colour is intended. Vanilla treats that packed colour
+     * as opaque white; multiplying it literally would erase the sampled sprite
+     * alpha and corrupt the whole LOD face.
+     */
+    private static int normalizeAbgr(int colour) {
+        if (colour == -1) {
+            return 0xFFFFFFFF;
+        }
+        if ((colour & 0xFF000000) == 0) {
+            colour |= 0xFF000000;
+        }
+        return colour;
     }
 
     private void ensureCanPut() {

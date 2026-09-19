@@ -4,9 +4,6 @@ import me.cortex.voxy.common.Logger;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 
-//Finds the beacons in a section as it is ingested. The palette answers "could this section contain one"
-//over a handful of entries, so a section of stone is rejected without touching a single block, and only
-//the rare hit pays for the 4096-block walk.
 public final class BeaconScanner {
     private BeaconScanner() {}
 

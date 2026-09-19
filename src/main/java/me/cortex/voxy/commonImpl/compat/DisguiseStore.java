@@ -6,22 +6,6 @@ import net.minecraft.core.BlockPos;
 
 import java.nio.ByteBuffer;
 
-//Remembers what a disguised block was wearing, so re-ingesting its section without the block entity does
-//not undress it.
-//
-//Copycats and Domum Ornamentum both work the same way: at ingest the compat reads the section's block
-//entities, asks each for its material, and registers (state, material) as a Mapper variant whose id then
-//stands in for the plain block. That id is persistent - it lives in the id mappings like any other. What
-//is not persistent is the ability to DERIVE it: the material comes from a block entity, and a section
-//re-ingested without one is written with the plain id, overwriting the variant. A player's camouflaged
-//build then reverts to bare skeleton exactly where it matters, out at LOD range where the client never
-//loaded the chunk and only a server-fed section ever arrives.
-//
-//The variant id is stored directly rather than the material's block state. Those ids are only meaningful
-//against one Mapper, which is the objection that ruled them out for contraption snapshots - but this
-//table lives in the same store as the mappings it refers to, so the two are created and deleted
-//together and an id cannot outlive its meaning. Six bytes per disguised block, against roughly sixty for
-//an encoded block state.
 public final class DisguiseStore {
     private static final byte FORMAT = 1;
     //A section cannot hold more than this many blocks, so a larger count is corrupt

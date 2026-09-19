@@ -1,15 +1,11 @@
 #import <voxy:lod/pos_util.glsl>
 layout(binding = NODE_DATA_BINDING, std430) restrict buffer NodeData {
-//Needs to be read and writeable for marking data,
-//(could do an evil violation, make this readonly, then have a writeonly varient, which means that writing might not be visible but will show up by the next frame)
-//Nodes are 16 bytes big (or 32 cant decide, 16 might _just_ be enough)
     uvec4[] nodes;
 };
 
 //First 2 are joined to be the position
 
 //All node access and setup into global variables
-//TODO: maybe make it global vars
 struct UnpackedNode {
     uint nodeId;
 
@@ -58,10 +54,6 @@ bool childListIsEmpty(in UnpackedNode node) {
     return node.childPtr == EMPTY_QUEUE_ID;
 }
 
-//bool isEmpty(in UnpackedNode node) {
-//    return (node.flags&2u) != 0;
-//}
-
 bool hasRequested(in UnpackedNode node) {
     return (node.flags&1u) != 0u;
 }
@@ -90,10 +82,6 @@ uvec2 getRawPos(in UnpackedNode node) {
     return node.rawPos;
 }
 
-/*
-uint getTransformIndex(in UnpackedNode node) {
-    return (node.flags >> 5)&31u;
-}*/
 
 //-----------------------------------
 

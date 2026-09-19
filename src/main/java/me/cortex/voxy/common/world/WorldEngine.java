@@ -94,24 +94,37 @@ public class WorldEngine {
 
     public static final int POS_FORMAT_VERSION = 1;
 
-    //TODO: Fixme/optimize, cause as the lvl gets higher, the size of x,y,z gets smaller so i can dynamically compact the format
-    // depending on the lvl, which should optimize colisions and whatnot
     public static long getWorldSectionId(int lvl, int x, int y, int z) {
-        return ((long)lvl<<60)|((long)(y&0xFF)<<52)|((long)(z&((1<<24)-1))<<28)|((long)(x&((1<<24)-1))<<4);//NOTE: 4 bits spare for whatever
+        if (y >= Byte.MIN_VALUE && y <= Byte.MAX_VALUE) {
+            return ((long)lvl<<60)|((long)(y&0xFF)<<52)|((long)(z&0xFFFFFF)<<28)|((long)(x&0xFFFFFF)<<4);
+        }
+        if (x < -(1<<22) || x >= (1<<22) || y < -(1<<11) || y >= (1<<11) || z < -(1<<23) || z >= (1<<23)) {
+            throw new IllegalArgumentException("World section position out of range: " + lvl + "@[" + x + ", " + y + ", " + z + "]");
+        }
+        return ((long)lvl<<60)|((long)(y&0xFFF)<<48)|((long)(z&0xFFFFFF)<<24)|((long)(x&0x7FFFFF)<<1)|1L;
     }
 
     public static int getLevel(long id) {
         return (int) ((id>>60)&0xf);
     }
     public static int getX(long id) {
+        if ((id&1L) != 0) {
+            return (int) ((id<<40)>>41);
+        }
         return (int) ((id<<36)>>40);
     }
 
     public static int getY(long id) {
+        if ((id&1L) != 0) {
+            return (int) ((id<<4)>>52);
+        }
         return (int) ((id<<4)>>56);
     }
 
     public static int getZ(long id) {
+        if ((id&1L) != 0) {
+            return (int) ((id<<16)>>40);
+        }
         return (int) ((id<<12)>>40);
     }
 
@@ -192,7 +205,6 @@ public class WorldEngine {
         if (this.refCount.decrementAndGet()<0) {
             throw new IllegalStateException("ref count less than 0");
         }
-        //TODO: maybe dont need to tick the last active time?
         this.lastActiveTime = System.currentTimeMillis();
     }
 

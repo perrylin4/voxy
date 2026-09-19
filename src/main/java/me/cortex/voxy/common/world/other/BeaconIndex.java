@@ -9,15 +9,6 @@ import net.minecraft.core.BlockPos;
 
 import java.nio.ByteBuffer;
 
-//Where the beacons are, per world. Only the positions: what a beacon's beam looks like - how tall, what
-//colours - is a function of the blocks around it, and those already live in the voxel store, so deriving
-//the beam at draw time from the same data the terrain came from keeps the two from disagreeing. Storing
-//the derived beam instead would need invalidating every time a pane of glass above one changed, which is
-//exactly the event we cannot see out where this matters.
-//
-//Keyed by section so ingest can rewrite a section's entry wholesale: a section is scanned, and whatever
-//it turns out to hold replaces whatever was there. No diffing, and a beacon that was mined leaves with
-//the section that no longer contains it.
 public final class BeaconIndex {
     public static final String TABLE = "beacons";
     private static final byte FORMAT = 1;
@@ -69,9 +60,6 @@ public final class BeaconIndex {
         this.listener = listener;
     }
 
-    //Replace everything known about one section. Empty retires the entry rather than storing a zero count,
-    //so a world full of ordinary sections costs nothing. Re-ingest hands every scanned section through
-    //here, so the unchanged case has to be free: no store write, no listener call.
     public void setSection(int sx, int sy, int sz, short[] packedLocals) {
         long key = BlockPos.asLong(sx, sy, sz);
         if (packedLocals == null || packedLocals.length == 0) {
@@ -127,11 +115,6 @@ public final class BeaconIndex {
         return false;
     }
 
-    //Absolute block positions of every known beacon.
-    //
-    //Copied under the lock and walked outside it. fastutil's synchronized wrapper does not cover the
-    //iterator, and the caller here is the render thread solving a beam per entry - which acquires
-    //storage sections and so must not run holding a lock an ingest worker needs to write.
     public void forEach(BeaconConsumer consumer) {
         long[] keys;
         short[][] values;

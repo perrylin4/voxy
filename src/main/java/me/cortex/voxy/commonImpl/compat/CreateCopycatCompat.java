@@ -5,6 +5,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtUtils;
+import net.minecraft.nbt.Tag;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import me.cortex.voxy.common.config.section.SectionStorage;
@@ -17,22 +20,10 @@ import net.neoforged.neoforge.client.model.data.ModelProperty;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
-//Create's copycat blocks (and the Copycats+ addon's) take their entire appearance from a material
-//BlockState stored on the block entity and fed to the wrapper model through ModelData - the json
-//models behind their blockstates are literally minecraft:block/air, so with EMPTY model data the
-//wrapper emits nothing and every copycat baked to a LOD model came out invisible. Same disease,
-//same cure as Domum Ornamentum: register (block state, material) pairs as Mapper variants at
-//ingest time, then rebuild the wrapper's ModelData when the variant block id gets baked. Copycat
-//states with no registered material (unfilled ones, or stale LOD data from before re-ingest) fall
-//back to the copycat base material - the grid skeleton the block shows up close when unfilled,
-//since an unfilled block entity carries the base state as its material rather than null. Material
-//extraction is reflective (getMaterial() exists on both Create's CopycatBlockEntity and Copycats+'
-//independent CCCopycatBlockEntity); the multi-material blocks of Copycats+ have no single
-//getMaterial() and quietly fall through (future work). Contraption meshes read the material from
-//the captured block entity nbt instead (see materialFromContraptionNbt).
 public final class CreateCopycatCompat {
     public static final String DISGUISE_TABLE = "disguise_copycat";
     public static final String VARIANT_TYPE = "create_copycat";
@@ -43,12 +34,31 @@ public final class CreateCopycatCompat {
 
     private static final ThreadLocal<SectionMappings> SECTION_MAPPINGS =
             ThreadLocal.withInitial(SectionMappings::new);
-    private static final Map<Mapper, Map<Integer, BlockState>> MATERIALS = new ConcurrentHashMap<>();
-    //material -> (serialized nbt, variant key) - stable per material, shared read-only downstream
+    private static final Map<Mapper, Map<Integer, MaterialSet>> MATERIALS = new ConcurrentHashMap<>();
+    private static final Map<MaterialSet, MaterialKey> MATERIAL_KEYS = new ConcurrentHashMap<>();
+    private static final String MATERIALS_KEY = "materials";
+
+    private record MaterialSet(Map<String, BlockState> parts) {
+        MaterialSet {
+            parts = Map.copyOf(parts);
+        }
+
+        BlockState primary() {
+            BlockState material = this.parts.get("material");
+            return material != null ? material : this.parts.values().stream().findFirst().orElse(null);
+        }
+
+    }
+
     private record MaterialKey(CompoundTag data, String key) {}
-    private static final Map<BlockState, MaterialKey> MATERIAL_KEYS = new ConcurrentHashMap<>();
 
     private static final Predicate<BlockState> COPYCAT_STATE_PREDICATE = CreateCopycatCompat::isCopycatState;
+    private static final ClassValue<Boolean> COPYCATS_PLUS_MODELS = new ClassValue<>() {
+        @Override
+        protected Boolean computeValue(Class<?> type) {
+            return type.getName().startsWith(ADDON_PREFIX + ".");
+        }
+    };
 
     private static final ClassValue<Optional<Method>> GET_MATERIAL_METHODS = new ClassValue<>() {
         @Override
@@ -61,14 +71,61 @@ public final class CreateCopycatCompat {
         }
     };
 
-    //The wrapper models' ModelData keys, fetched reflectively once. All are public static finals;
-    //stuffing the material under every key lets one ModelData serve either mod's wrapper model.
-    //Copycats+ getQuads reads the MATERIALS map keyed by model part ("material" for single-material
-    //blocks - the same upgrade its own gatherModelData applies), not the single-value property.
+    private static final ClassValue<Optional<Method>> GET_STORAGE_METHODS = new ClassValue<>() {
+        @Override
+        protected Optional<Method> computeValue(Class<?> type) {
+            try {
+                return Optional.of(type.getMethod("getMaterialItemStorage"));
+            } catch (ReflectiveOperationException ignored) {
+                return Optional.empty();
+            }
+        }
+    };
+
+    private static final ClassValue<Optional<Method>> GET_MATERIAL_MAP_METHODS = new ClassValue<>() {
+        @Override
+        protected Optional<Method> computeValue(Class<?> type) {
+            try {
+                return Optional.of(type.getMethod("getMaterialMap"));
+            } catch (ReflectiveOperationException ignored) {
+                return Optional.empty();
+            }
+        }
+    };
+
+    private static final ClassValue<Optional<Method>> GET_STORAGE_PROPERTIES_METHODS = new ClassValue<>() {
+        @Override
+        protected Optional<Method> computeValue(Class<?> type) {
+            try {
+                return Optional.of(type.getMethod("storageProperties"));
+            } catch (ReflectiveOperationException ignored) {
+                return Optional.empty();
+            }
+        }
+    };
+
+    private static final ClassValue<Optional<Method>> GET_SPRITE_PROPERTY_METHODS = new ClassValue<>() {
+        @Override
+        protected Optional<Method> computeValue(Class<?> type) {
+            try {
+                return Optional.of(type.getMethod("getProperty"));
+            } catch (ReflectiveOperationException ignored) {
+                return Optional.empty();
+            }
+        }
+    };
+
     private static volatile ModelProperty<BlockState> createMaterialProperty;
     private static volatile ModelProperty<BlockState> addonMaterialProperty;
     private static volatile ModelProperty<Map<String, BlockState>> addonMaterialsProperty;
+    private static volatile ModelProperty<Boolean> virtualProperty;
     private static volatile boolean propertiesResolved;
+
+    public interface SectionListener {
+        void changed(SectionStorage storage, int sectionX, int sectionY, int sectionZ);
+    }
+
+    public static volatile SectionListener sectionListener;
 
     private CreateCopycatCompat() {
     }
@@ -81,17 +138,16 @@ public final class CreateCopycatCompat {
         return CopycatCommon.isCopycatState(state);
     }
 
+    public static boolean isCopycatsPlusModel(BakedModel model) {
+        return LOADED && model != null && COPYCATS_PLUS_MODELS.get(model.getClass());
+    }
+
     public static void beginSection(Mapper mapper, SectionStorage storage, LevelChunk chunk, LevelChunkSection section, int sectionX, int sectionY, int sectionZ) {
         if (!LOADED) {
             return;
         }
         SectionMappings mappings = SECTION_MAPPINGS.get();
         mappings.reset();
-        //No block entities to ask - a section streamed from the server, or a chunk that has gone. The
-        //materials were recorded the last time they COULD be read, so use those instead of publishing
-        //plain ids over a build that was dressed. Without this a camouflaged build reverts to bare
-        //skeleton exactly where it is most visible: out at LOD range, where the client never loads the
-        //chunk and only a server-fed section ever arrives.
         if (mapper == null || section == null) return;
         if (chunk == null || chunk.getBlockEntities().isEmpty()) {
             if (section.maybeHas(COPYCAT_STATE_PREDICATE)) {
@@ -106,10 +162,6 @@ public final class CreateCopycatCompat {
         int minY = sectionY << 4;
         int maxY = minY + 15;
 
-        //The iteration itself is inside the guard, not just the body: this runs on an ingest worker over
-        //a map the main thread mutates, so hasNext()/next() can throw ConcurrentModification. Whatever
-        //was collected before the throw still publishes below - a partial dressing beats none, and the
-        //next ingest of this section redoes it.
         try {
             for (BlockEntity blockEntity : chunk.getBlockEntities().values()) {
                 if (!CopycatCommon.isCopycatClass(blockEntity)) {
@@ -121,20 +173,6 @@ public final class CreateCopycatCompat {
                 }
 
                 try {
-                    Method getMaterial = GET_MATERIAL_METHODS.get(blockEntity.getClass()).orElse(null);
-                    if (getMaterial == null) {
-                        continue;//multi-material blocks etc: leave on the plain path
-                    }
-                    Object materialObj = getMaterial.invoke(blockEntity);
-                    if (!(materialObj instanceof BlockState material) || material.isAir()) {
-                        continue;
-                    }
-                    //An unfilled copycat carries the copycat base "material" - nothing to dress it in
-                    var materialId = BuiltInRegistries.BLOCK.getKey(material.getBlock());
-                    if (materialId == null || materialId.getPath().equals("copycat_base")) {
-                        continue;
-                    }
-
                     int lx = pos.getX() & 15;
                     int ly = pos.getY() & 15;
                     int lz = pos.getZ() & 15;
@@ -143,16 +181,19 @@ public final class CreateCopycatCompat {
                         continue;
                     }
 
-                    //writeBlockState + toString are pure per-BE waste for a base built from one material
-                    //(e.g. hundreds of andesite copycats re-serialize andesite every ingest). The material
-                    //-> (nbt,key) mapping is stable and the downstream mapper only reads the tag, so cache
-                    //it. BlockStates are interned registry singletons, safe as identity keys.
-                    MaterialKey mk = MATERIAL_KEYS.get(material);
+                    MaterialSet materials = extractMaterials(blockEntity);
+                    if (materials == null) {
+                        materials = baseMaterialsFor(state);
+                    }
+                    if (materials == null) {
+                        continue;
+                    }
+
+                    MaterialKey mk = MATERIAL_KEYS.get(materials);
                     if (mk == null) {
                         me.cortex.voxy.commonImpl.PerfStats.copycatKeyMiss.increment();
-                        CompoundTag tag = NbtUtils.writeBlockState(material);
-                        mk = new MaterialKey(tag, tag.toString());
-                        MaterialKey prior = MATERIAL_KEYS.putIfAbsent(material, mk);
+                        mk = createMaterialKey(materials);
+                        MaterialKey prior = MATERIAL_KEYS.putIfAbsent(materials, mk);
                         if (prior != null) {
                             mk = prior;
                         }
@@ -161,7 +202,7 @@ public final class CreateCopycatCompat {
                     }
 
                     int mappedId = mapper.getIdForBlockStateVariant(state, VARIANT_TYPE, mk.key, mk.data);
-                    materialsFor(mapper).putIfAbsent(mappedId, material);
+                    materialsFor(mapper).putIfAbsent(mappedId, materials);
                     mappings.put(lx | (lz << 4) | (ly << 8), mappedId);
                 } catch (Throwable ignored) {
                 }
@@ -185,6 +226,8 @@ public final class CreateCopycatCompat {
                 DisguiseStore.save(storage, DISGUISE_TABLE, sectionX, sectionY, sectionZ,
                         packed, mappings.touchedCount);
             }
+            SectionListener listener = sectionListener;
+            if (listener != null) listener.changed(storage, sectionX, sectionY, sectionZ);
         }
     }
 
@@ -208,10 +251,9 @@ public final class CreateCopycatCompat {
             return;
         }
         try {
-            BlockState material = NbtUtils.readBlockState(
-                    BuiltInRegistries.BLOCK.asLookup(), data);
-            if (!material.isAir()) {
-                materialsFor(mapper).putIfAbsent(blockId, material);
+            MaterialSet materials = readMaterials(data);
+            if (materials != null) {
+                materialsFor(mapper).putIfAbsent(blockId, materials);
             }
         } catch (Throwable ignored) {
         }
@@ -220,7 +262,7 @@ public final class CreateCopycatCompat {
     //Client only (called from the model bakery): the material's own chunk render type - the copycat
     //wrapper model only emits quads when queried with the MATERIAL's layer, not the copycat's
     public static net.minecraft.client.renderer.RenderType renderLayerOverride(Mapper mapper, int blockId, BlockState state) {
-        BlockState material = materialFor(mapper, blockId);
+        BlockState material = primaryMaterial(mapper, blockId);
         if (material == null) {
             material = baseMaterialFor(state);
         }
@@ -236,23 +278,26 @@ public final class CreateCopycatCompat {
 
     //The material state drives block colour providers (grass/leaf copycats biome-tint like their material)
     public static BlockState getColourState(Mapper mapper, int blockId, BlockState fallback) {
-        BlockState material = materialFor(mapper, blockId);
+        BlockState material = primaryMaterial(mapper, blockId);
         return material == null ? fallback : material;
     }
 
     //Client only: bake plan carrying the wrapper ModelData (material under both mods' keys) and the
     //material state for biome tinting
     public static DomumOrnamentumCompat.BakePlan getBakePlan(Mapper mapper, int blockId, BlockState state) {
-        BlockState material = materialFor(mapper, blockId);
-        if (material == null) {
-            material = baseMaterialFor(state);
+        MaterialSet materials = materialSetFor(mapper, blockId);
+        if (materials == null) {
+            materials = baseMaterialsFor(state);
         }
-        if (material == null) {
+        if (materials == null) {
             return DomumOrnamentumCompat.BakePlan.empty();
         }
         try {
-            ModelData modelData = buildModelData(material);
-            return new DomumOrnamentumCompat.BakePlan(modelData, null, material, -1, false, false, false);
+            ModelData modelData = buildModelData(materials.parts(), true);
+            boolean detailed = materialSetFor(mapper, blockId) != null
+                    && me.cortex.voxy.client.config.VoxyConfig.CONFIG.distantCopycats;
+            return new DomumOrnamentumCompat.BakePlan(modelData, null, materials.primary(),
+                    -1, false, true, detailed);
         } catch (Throwable ignored) {
             return DomumOrnamentumCompat.BakePlan.empty();
         }
@@ -261,8 +306,14 @@ public final class CreateCopycatCompat {
     //Client only: the ModelData a copycat wrapper model expects, with the material stuffed under
     //every key either mod reads
     public static ModelData buildModelData(BlockState material) {
+        return buildModelData(Map.of("material", material), false);
+    }
+
+    public static ModelData buildModelData(Map<String, BlockState> materials, boolean virtual) {
         resolveProperties();
         ModelData.Builder builder = ModelData.builder();
+        BlockState material = materials.get("material");
+        if (material == null) material = materials.values().stream().findFirst().orElse(null);
         if (createMaterialProperty != null) {
             builder.with(createMaterialProperty, material);
         }
@@ -270,7 +321,10 @@ public final class CreateCopycatCompat {
             builder.with(addonMaterialProperty, material);
         }
         if (addonMaterialsProperty != null) {
-            builder.with(addonMaterialsProperty, new java.util.HashMap<>(Map.of("material", material)));
+            builder.with(addonMaterialsProperty, new java.util.HashMap<>(materials));
+        }
+        if (virtual && virtualProperty != null) {
+            builder.with(virtualProperty, true);
         }
         return builder.build();
     }
@@ -298,44 +352,148 @@ public final class CreateCopycatCompat {
         return base.isAir() ? null : base;
     }
 
-    //Contraption/carriage mesh path: contraptions capture their block entities as nbt, so the
-    //material comes from the copycat block entity's serialized "Material" tag (both mods use the
-    //same key). Unfilled or unreadable falls back to the base skeleton. Null for non-copycats.
+    private static MaterialSet baseMaterialsFor(BlockState state) {
+        BlockState base = baseMaterialFor(state);
+        if (base == null) return null;
+        try {
+            Method method = GET_STORAGE_PROPERTIES_METHODS.get(state.getBlock().getClass()).orElse(null);
+            if (method != null && method.invoke(state.getBlock()) instanceof Iterable<?> properties) {
+                TreeMap<String, BlockState> parts = new TreeMap<>();
+                for (Object property : properties) {
+                    if (property instanceof String name) parts.put(name, base);
+                }
+                if (!parts.isEmpty()) return new MaterialSet(parts);
+            }
+        } catch (Throwable ignored) {
+        }
+        return new MaterialSet(Map.of("material", base));
+    }
+
+    //Restores simple or multi-part materials from captured block entity NBT.
     public static ModelData materialFromContraptionNbt(BlockState state, CompoundTag beNbt) {
         if (!isCopycatState(state)) {
             return null;
         }
-        BlockState material = null;
+        MaterialSet materials = null;
         try {
+            materials = readMaterialsFromBlockEntityNbt(beNbt);
             if (beNbt != null && beNbt.contains("Material")) {
-                material = NbtUtils.readBlockState(
+                BlockState material = NbtUtils.readBlockState(
                         BuiltInRegistries.BLOCK.asLookup(), beNbt.getCompound("Material"));
+                if (materials == null && !material.isAir()) {
+                    materials = new MaterialSet(Map.of("material", material));
+                }
             }
         } catch (Throwable ignored) {
         }
-        if (material == null || material.isAir()) {
-            material = baseMaterialFor(state);
+        if (materials == null) {
+            materials = baseMaterialsFor(state);
         }
-        if (material == null) {
+        if (materials == null) {
             return null;
         }
         try {
-            return buildModelData(material);
+            return buildModelData(materials.parts(), true);
         } catch (Throwable ignored) {
             return null;
         }
     }
 
-    private static BlockState materialFor(Mapper mapper, int blockId) {
+    public static BlockState materialForQuad(Mapper mapper, int blockId, BakedQuad quad) {
+        MaterialSet materials = materialSetFor(mapper, blockId);
+        if (materials == null) return null;
+        try {
+            Method method = GET_SPRITE_PROPERTY_METHODS.get(quad.getSprite().getClass()).orElse(null);
+            if (method != null && method.invoke(quad.getSprite()) instanceof String property) {
+                BlockState material = materials.parts().get(property);
+                if (material != null) return material;
+            }
+        } catch (Throwable ignored) {
+        }
+        return materials.primary();
+    }
+
+    private static BlockState primaryMaterial(Mapper mapper, int blockId) {
+        MaterialSet materials = materialSetFor(mapper, blockId);
+        return materials == null ? null : materials.primary();
+    }
+
+    private static MaterialSet materialSetFor(Mapper mapper, int blockId) {
         if (!LOADED || mapper == null) {
             return null;
         }
-        Map<Integer, BlockState> materials = MATERIALS.get(mapper);
+        Map<Integer, MaterialSet> materials = MATERIALS.get(mapper);
         return materials == null ? null : materials.get(blockId);
     }
 
-    private static Map<Integer, BlockState> materialsFor(Mapper mapper) {
+    private static Map<Integer, MaterialSet> materialsFor(Mapper mapper) {
         return MATERIALS.computeIfAbsent(mapper, m -> new ConcurrentHashMap<>());
+    }
+
+    private static MaterialSet extractMaterials(BlockEntity blockEntity) throws ReflectiveOperationException {
+        Method storageMethod = GET_STORAGE_METHODS.get(blockEntity.getClass()).orElse(null);
+        if (storageMethod != null) {
+            Object storage = storageMethod.invoke(blockEntity);
+            if (storage != null) {
+                Method mapMethod = GET_MATERIAL_MAP_METHODS.get(storage.getClass()).orElse(null);
+                if (mapMethod != null && mapMethod.invoke(storage) instanceof Map<?, ?> raw) {
+                    TreeMap<String, BlockState> parts = new TreeMap<>();
+                    raw.forEach((key, value) -> {
+                        if (key instanceof String name && value instanceof BlockState state && !state.isAir()) {
+                            parts.put(name, state);
+                        }
+                    });
+                    if (!parts.isEmpty()) return new MaterialSet(parts);
+                }
+            }
+        }
+        Method getMaterial = GET_MATERIAL_METHODS.get(blockEntity.getClass()).orElse(null);
+        if (getMaterial != null && getMaterial.invoke(blockEntity) instanceof BlockState material && !material.isAir()) {
+            return new MaterialSet(Map.of("material", material));
+        }
+        return null;
+    }
+
+    private static MaterialKey createMaterialKey(MaterialSet materials) {
+        CompoundTag root = new CompoundTag();
+        CompoundTag parts = new CompoundTag();
+        StringBuilder key = new StringBuilder("v2;");
+        new TreeMap<>(materials.parts()).forEach((name, state) -> {
+            CompoundTag stateTag = NbtUtils.writeBlockState(state);
+            parts.put(name, stateTag);
+            key.append(name.length()).append(':').append(name).append('=').append(stateTag).append(';');
+        });
+        root.put(MATERIALS_KEY, parts);
+        return new MaterialKey(root, key.toString());
+    }
+
+    private static MaterialSet readMaterials(CompoundTag data) {
+        if (data.contains(MATERIALS_KEY, Tag.TAG_COMPOUND)) {
+            CompoundTag partsTag = data.getCompound(MATERIALS_KEY);
+            TreeMap<String, BlockState> parts = new TreeMap<>();
+            for (String name : partsTag.getAllKeys()) {
+                BlockState state = NbtUtils.readBlockState(
+                        BuiltInRegistries.BLOCK.asLookup(), partsTag.getCompound(name));
+                if (!state.isAir()) parts.put(name, state);
+            }
+            return parts.isEmpty() ? null : new MaterialSet(parts);
+        }
+        BlockState material = NbtUtils.readBlockState(BuiltInRegistries.BLOCK.asLookup(), data);
+        return material.isAir() ? null : new MaterialSet(Map.of("material", material));
+    }
+
+    private static MaterialSet readMaterialsFromBlockEntityNbt(CompoundTag beNbt) {
+        if (beNbt == null || !beNbt.contains("material_data", Tag.TAG_COMPOUND)) return null;
+        CompoundTag data = beNbt.getCompound("material_data");
+        TreeMap<String, BlockState> parts = new TreeMap<>();
+        for (String name : data.getAllKeys()) {
+            CompoundTag item = data.getCompound(name);
+            if (!item.contains("material", Tag.TAG_COMPOUND)) continue;
+            BlockState state = NbtUtils.readBlockState(
+                    BuiltInRegistries.BLOCK.asLookup(), item.getCompound("material"));
+            if (!state.isAir()) parts.put(name, state);
+        }
+        return parts.isEmpty() ? null : new MaterialSet(parts);
     }
 
     @SuppressWarnings("unchecked")
@@ -353,6 +511,11 @@ public final class CreateCopycatCompat {
             Class<?> addonModel = Class.forName(ADDON_PREFIX + ".foundation.copycat.model.neoforge.CopycatModelNeoForge");
             addonMaterialProperty = (ModelProperty<BlockState>) addonModel.getField("MATERIAL_PROPERTY").get(null);
             addonMaterialsProperty = (ModelProperty<Map<String, BlockState>>) addonModel.getField("MATERIALS_PROPERTY").get(null);
+        } catch (Throwable ignored) {
+        }
+        try {
+            Class<?> helper = Class.forName("net.createmod.ponder.render.VirtualRenderHelper");
+            virtualProperty = (ModelProperty<Boolean>) helper.getField("VIRTUAL_PROPERTY").get(null);
         } catch (Throwable ignored) {
         }
         propertiesResolved = true;

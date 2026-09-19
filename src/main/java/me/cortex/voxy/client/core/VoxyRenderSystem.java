@@ -85,17 +85,12 @@ public class VoxyRenderSystem {
     private final int[] viewportDimensions = new int[4];
     private final Matrix4f projectionScratch = new Matrix4f();
     private final Matrix4f modifiedProjectionScratch = new Matrix4f();
-    // Shader packs without a native Voxy program cannot safely receive ordinary RGBA output while
-    // Iris is still filling its pack-specific G-buffer. Keep only the current frame's viewport and
-    // perform the same NormalRenderPipeline pass after Iris has produced the final colour image.
-    // This moves existing work; it does not add another LOD render or a shader-pack scan.
     private Viewport<?> pendingUnpatchedIrisViewport;
 
 
     public String getPipelineName() { return this.pipeline == null ? "none" : this.pipeline.getClass().getSimpleName(); }
 
     private static AbstractSectionRenderer.Factory<?,? extends IGeometryData> getRenderBackendFactory() {
-        //TODO: need todo a thing where selects optimal section render based on if supports the pipeline and geometry data type
         return MDICSectionRenderer.FACTORY;
     }
 
@@ -163,7 +158,7 @@ public class VoxyRenderSystem {
                 int maxSec = (Minecraft.getInstance().level.getMaxSection() - 1) >> 5;
 
                 //Do some very cheeky stuff for MiB
-                if (VoxyCommon.IS_MINE_IN_ABYSS) {//TODO: make this somehow configurable
+                if (VoxyCommon.IS_MINE_IN_ABYSS) {
                     minSec = -8;
                     maxSec = 7;
                 }
@@ -178,6 +173,9 @@ public class VoxyRenderSystem {
             }
 
             this.chunkBoundRenderer = new ChunkBoundRenderer(this.pipeline);
+            // A Voxy-only reload must repopulate the mask even when Sodium kept its render list.
+            var sodiumRenderer = net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer.instanceNullable();
+            if (sodiumRenderer != null) sodiumRenderer.scheduleTerrainUpdate();
 
             Logger.info("Voxy render system created with " + this.geometryData.getMaxCapacity() + " geometry capacity, using pipeline '" + this.pipeline.getClass().getSimpleName() + "' with renderer '" + sectionRenderer.getClass().getSimpleName() + "'");
         } catch (RuntimeException e) {
@@ -213,8 +211,13 @@ public class VoxyRenderSystem {
             cameraY += (16+(256-32-sector*30))*16;
         }
 
-        //cameraY += 100;
-        var voxyProjection = computeProjectionMat(this.properties, vanillaProjection);
+        // Packs that opt in can match the projection far plane to Voxy's configured section cube.
+        // The diagonal keeps every corner inside the frustum; two chunks cover traversal padding.
+        float farPlane = 16.0f * 3000.0f;
+        if (this.pipeline.useDynamicFarPlane()) {
+            farPlane = (float) ((VoxyConfig.CONFIG.createLodRadius() + 32.0) * Math.sqrt(3.0));
+        }
+        var voxyProjection = computeProjectionMat(this.properties, vanillaProjection, farPlane);
 
         glGetIntegerv(GL_VIEWPORT, this.viewportDimensions);
 
@@ -248,25 +251,6 @@ public class VoxyRenderSystem {
         return viewport;
     }
 
-    //Blindness and darkness are supposed to take the world away, and vanilla does that by collapsing
-    //fog to a few blocks. The LOD is drawn into its own target with its own fog, so vanilla's collapse
-    //never reaches it and the distant world stayed lit behind a black foreground. Rather than trying to
-    //reproduce vanilla's band on our side, just do not draw: the whole point of the effect is that there
-    //is nothing to see. Sits above the pipeline split, so it covers the shader path too, where our fog
-    //uniforms do not even exist.
-    //
-    //The fog end is checked as well as the effect, because darkness ramps in over 22 ticks
-    //(MobEffects.DARKNESS is registered with setBlendDuration(22)) and vanilla lerps its fog from the
-    //full far plane down. For about a second at each end of the pulse the effect is present while
-    //vanilla is still drawing everything - dropping the LOD then would blink the distant world out
-    //while the near world stayed bright. Waiting for vanilla's own band to close keeps the two in step.
-    //Live test for a medium that takes vision away. Asked of the camera every frame rather than read
-    //from a stored value: a cached one that stops being refreshed strands, and a stranded WATER state
-    //tints every LOD in the world blue after surfacing.
-    //Only the mob effects, not fluids. Vanilla's fluid fogs are fixed distances - water 96*waterVision,
-    //lava 1.0, powder snow 2.0 - so none of them scale off farPlaneDistance and none of them need the
-    //render-distance inputs neutralised. Including fluids there would also clip LOD geometry underwater,
-    //since getDepthFar is the projection far plane and the LOD reaches well past vanilla's.
     public static boolean visionEffectPresent() {
         var mc = Minecraft.getInstance();
         if (mc.gameRenderer == null) {
@@ -292,9 +276,6 @@ public class VoxyRenderSystem {
                     || living.hasEffect(net.minecraft.world.effect.MobEffects.DARKNESS));
     }
 
-    //What renderOpaque actually saw this frame. The command that reports it runs on the main thread
-    //outside the render pass, where the fog state is whatever the last writer left - reading it there
-    //describes a different moment than the one that matters.
     private static volatile float lastRenderFogEnd = -1;
     private static volatile float lastRenderVanillaFar = -1;
     private static volatile boolean lastRenderSkipped;
@@ -324,11 +305,6 @@ public class VoxyRenderSystem {
             return false;
         }
 
-        //Work out how far vanilla lets the player see, using vanilla's own formulas rather than reading
-        //back a fog value. Reading it back does not work here: several setupFog calls run per frame with
-        //different far planes (our own GameRenderer.getDepthFar wrap raises one of them to 32*4*srd), so
-        //whichever call happens to be last leaves a number that means nothing without knowing which far
-        //plane produced it. Computing it directly needs no such context.
         float viewDistance = mc.options.getEffectiveRenderDistance() * 16.0f;
         float restricted = Float.MAX_VALUE;
 
@@ -440,15 +416,13 @@ public class VoxyRenderSystem {
         this.pipeline.preSetup(viewport);
 
         TimingStatistics.E.start();
-        //"CB": the hole-punch mask rasterises one AABB per sodium-visible section at full viewport
-        //resolution, so its cost tracks how many chunk meshes are loaded rather than anything voxy
-        //controls. TimingStatistics.E only measures the submission, which reads ~0 no matter how
-        //expensive the fill is - this GPU marker is the only way to see the real number.
         GPUTiming.INSTANCE.marker("CB");
         if (!VoxyClient.disableSodiumChunkRender() && !IrisUtil.irisShadowActive()) {
+            me.cortex.voxy.common.world.WorldSection.setArrayPoolCapMiB(VoxyConfig.CONFIG.sectionArrayPoolMiB);
             this.chunkBoundRenderer.render(viewport);
         } else {
             viewport.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
+            viewport.invalidateChunkMask();
         }
         TimingStatistics.E.stop();
 
@@ -504,9 +478,6 @@ public class VoxyRenderSystem {
                 GlStateManager._bindTexture(0);
                 glBindSampler(i, 0);
             }
-            // Keep the conventional post-world-render contract. Leaving unit 11 active makes
-            // Universal Mod Core bind Immersive Railroading OBJ textures to unit 11 while its
-            // shader samples unit 0, which displays unrelated block-atlas sprites on the track.
             GlStateManager._activeTexture(GlConst.GL_TEXTURE0);
 
             IrisUtil.clearIrisSamplers();
@@ -550,10 +521,6 @@ public class VoxyRenderSystem {
     }
 
 
-    //Left uncalled, as in the base. It raises subDivisionSize by INCREASE_PER_SECOND/fps every frame
-    //that fps < 55 and persists the result to the config, so one heavy session ratchets a hand-tuned 28
-    //up to 126 and leaves every distant LOD mushy for good - worst head-on, since the subdivision test's
-    //screen-space metric is smallest at screen centre. Wire it up only with a decay path and no persist.
     private void autoBalanceSubDivSize() {
         // Only raise quality when the mesh queue is under control.
         boolean canDecreaseSize = this.renderGen.getTaskCount() < 300;
@@ -575,7 +542,7 @@ public class VoxyRenderSystem {
         return Minecraft.getInstance().options.getEffectiveRenderDistance() * 16;
     }
 
-    private Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base) {
+    private Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base, float farPlane) {
 
         // Preserve projection changes applied by Minecraft, such as view bobbing.
         var rawMCProj = RenderSystem.getProjectionMatrix();
@@ -584,7 +551,7 @@ public class VoxyRenderSystem {
         float near = getRenderDistance() <= 32.0f ? 8.0f : 16.0f;
         near = VoxyClient.disableSodiumChunkRender() ? 0.1f : near;
 
-        float far = 16 * 3000;
+        float far = farPlane;
 
         // Reverse-Z swaps the near and far mapping.
         if (properties.isReverseZ()) {
@@ -635,6 +602,14 @@ public class VoxyRenderSystem {
         debug.add("Buf/Tex [#/Mb]: [" + GlBuffer.getCount() + "/" + (GlBuffer.getTotalSize()/1_000_000) + "],[" + GlTexture.getCount() + "/" + (GlTexture.getEstimatedTotalSize()/1_000_000)+"]");
         //Sodium-visible sections drive the hole-punch mask's fill cost (see the "CB" GPU marker)
         debug.add("Mask sections (sodium visible): " + this.chunkBoundRenderer.getLastRenderedSectionCount());
+        var maskView = this.viewportSelector.getViewport();
+        debug.add("mask " + maskView.chunkMaskWidth + "x" + maskView.chunkMaskHeight
+                + " | hiz " + maskView.hiZBuffer.describe());
+        debug.add("maskReuse: " + this.chunkBoundRenderer.describeReuseState());
+        debug.add("arrayPool: " + me.cortex.voxy.common.world.WorldSection.getReuseCacheCount() / 4.0
+                + "/" + VoxyConfig.CONFIG.sectionArrayPoolMiB + " MiB | miss "
+                + me.cortex.voxy.commonImpl.PerfStats.sectionArrayPoolMiss.sum()
+                + " overflow " + me.cortex.voxy.commonImpl.PerfStats.sectionArrayPoolOverflow.sum());
         {
             this.modelService.addDebugData(debug);
             this.renderGen.addDebugData(debug);

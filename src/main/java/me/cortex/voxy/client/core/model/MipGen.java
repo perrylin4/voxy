@@ -11,7 +11,9 @@ import static me.cortex.voxy.client.core.model.ModelFactory.MODEL_TEXTURE_SIZE;
 
 public class MipGen {
     static {
-        if (MODEL_TEXTURE_SIZE>16) throw new IllegalStateException("TODO: THIS MUST BE UPDATED, IT CURRENTLY ASSUMES 16 OR SMALLER SIZE");
+        if (MODEL_TEXTURE_SIZE > 16) {
+            throw new IllegalStateException("Model texture sizes above 16 are unsupported");
+        }
     }
     private record Cache(short[] SCRATCH, ByteArrayFIFOQueue QUEUE) {
         private Cache() {
@@ -89,9 +91,7 @@ public class MipGen {
     }
 
     public static void putTextures(boolean darkened, ColourDepthTextureData[] textures, MemoryBuffer into) {
-        //if (MODEL_TEXTURE_SIZE != 16) {throw new IllegalStateException("THIS METHOD MUST BE REDONE IF THIS CONST CHANGES");}
 
-        //TODO: need to use a write mask to see what pixels must be used to contribute to mipping
         // as in, using the depth/stencil info, check if pixel was written to, if so, use that pixel when blending, else dont
 
         final long addr = into.address;
@@ -130,7 +130,6 @@ public class MipGen {
             int dTileSize = sTileSize >> 1;
             int sWidth = sTileSize * 3;
             int dWidth = dTileSize * 3;
-            //TODO: OPTIMZIE THIS
             for (int face = 0; face < 6; face++) {
                 int sBx = (face>>1) * sTileSize;
                 int sBy = (face&1) * sTileSize;
@@ -156,8 +155,6 @@ public class MipGen {
             }
         }
 
-        /*
-         */
     }
 
     public static void generateMipmaps(long[] textures, int size) {

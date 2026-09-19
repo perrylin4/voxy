@@ -30,13 +30,6 @@ public class MixinClientPacketListener {
         }
     }
 
-    //A section-bulk packet is how the server delivers any multi-block change made in one tick - a
-    //contraption lifting into an entity, or laying itself back down as blocks. The per-block ingest
-    //trigger takes only border air (MixinClientLevel), which leaves most of a machine's footprint
-    //un-ingested: the LOD keeps a body that left, or a hole where one parked, and the stale copy
-    //shows through wherever the real section draws nothing. The packet is the natural coalescing
-    //point - one section re-ingest per section per server tick, bounded by what the server sends.
-    //TAIL: the handler has applied every change to the level by then.
     @Inject(method = "handleChunkBlocksUpdate", at = @At("TAIL"))
     private void voxy$ingestBulkSectionUpdate(ClientboundSectionBlocksUpdatePacket packet, CallbackInfo ci) {
         if (VoxyCommon.getInstance() == null || !VoxyConfig.CONFIG.ingestEnabled) {

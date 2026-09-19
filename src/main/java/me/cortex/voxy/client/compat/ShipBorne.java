@@ -4,24 +4,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.neoforged.fml.ModList;
 
-//Sable keeps a ship's blocks and entities in the main level at plot-grid coordinates (around 2.05e7) and
-//only moves them onto the ship when rendering. A world-space distance check therefore reads ~2e7 blocks
-//for anything riding a ship, so every distance cull would fire on it and nothing on a ship would ever
-//draw. The culls ask here first and leave ship-borne content alone: it is drawn against the ship's own
-//geometry rather than floating over the LOD, and sable already tracks and frustum-culls its sub-levels.
-//
-//The sable types are confined to SableShipContent, which the JVM only links once the call below actually
-//runs, so a game without sable never loads them and pays a single static boolean.
 public final class ShipBorne {
     private static final boolean SABLE_PRESENT = ModList.get() != null && ModList.get().isLoaded("sable");
-    //Two fuses, because the calls behind them fail independently and one of them failing must not take
-    //the other with it. The gate reaches only SubLevelContainer.inBounds; the self-heal reaches into
-    //sable's Flywheel compat, a far larger surface that a half-synced sub-level during world load can
-    //throw from on its own. Sharing one flag let that throw turn the gate off, and a gate answering
-    //false means every cull measures ship-borne content at its plot coordinates ~2e7 blocks out -
-    //kinetics culled away, embedded matrices zeroed, contraption snapshots baked out there. That is
-    //the exact failure this class exists to prevent.
-    //Volatile: written from a render thread that throws, read from every cull on the next frame.
     private static volatile boolean gateUnavailable;
     private static volatile boolean healUnavailable;
 

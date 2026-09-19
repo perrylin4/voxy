@@ -76,4 +76,8 @@ public abstract class ModelQueries {
    public static long lightEmission(long meta) {
       return meta >> 55 & 15L;
    }
+
+   public static int fluidHeight(long metadata) {
+      return (int)(metadata >>> 59 & 31L);
+   }
 }

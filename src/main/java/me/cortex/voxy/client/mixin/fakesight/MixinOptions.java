@@ -18,7 +18,8 @@ public abstract class MixinOptions {
             )
     )
     private Object voxy$modifyPlayerInformationRenderDistance(OptionInstance<?> instance) {
-        if (VoxyConfig.CONFIG.enableExtendedRequestDistance) {
+        if (VoxyConfig.CONFIG.enableExtendedRequestDistance
+                && net.minecraft.client.Minecraft.getInstance().hasSingleplayerServer()) {
             return Integer.valueOf(VoxyConfig.CONFIG.getRequestDistance());
         }
         return instance.get();

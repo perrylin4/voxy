@@ -14,9 +14,6 @@ public abstract class StorageBackend implements IMappingStorage, IStoredSectionP
 
     public abstract void setSectionData(long key, MemoryBuffer data);
 
-    //A group of section writes applied together. Thread-confined: created, filled and committed on one
-    //thread. put() MUST fully consume data before returning - callers hand in a thread-local scratch
-    //buffer that the next serialize overwrites, so a batch can defer the COMMIT but never the read.
     public interface SectionWriteBatch extends AutoCloseable {
         void put(long key, MemoryBuffer data);
         long dataSize();
@@ -45,14 +42,6 @@ public abstract class StorageBackend implements IMappingStorage, IStoredSectionP
 
     public abstract void deleteSectionData(long key);
 
-    //Long-keyed tables beside the section store, for things derived from the world that are not voxel
-    //data - a beacon index, later a contraption snapshot. Kept out of the section store because these
-    //are read by their own consumers and must not turn up in iteratePositions, and out of the id
-    //mappings because those are int-keyed and loaded whole.
-    //
-    //Default: no table, so a backend without one costs nothing and its caller simply does not persist.
-    //Every table is written whole per key - a key is put or deleted, never edited in place - so a
-    //re-derived key needs no diff against what was there.
     public interface AuxEntryConsumer {
         void accept(long key, byte[] value);
     }

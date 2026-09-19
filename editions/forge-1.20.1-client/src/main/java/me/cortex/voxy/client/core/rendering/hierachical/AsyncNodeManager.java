@@ -65,6 +65,7 @@ public class AsyncNodeManager {
     private final long geometryCapacity;
     private volatile boolean running = true;
     private volatile Throwable uncaughtException;
+    private volatile boolean geometryAllocationStalled;
 
     private final NodeManager manager;
     private final BasicAsyncGeometryManager geometryManager;
@@ -263,12 +264,26 @@ public class AsyncNodeManager {
 
         //Limit to X geometry for each loop run to try smooth things more
         long estimatedGeometryUploadAmount = 0;
-        for (int limit = 0; limit < 300 && ((this.geometryCapacity-this.geometryManager.getGeometryUsedBytes())>50_000_000L) && estimatedGeometryUploadAmount<1_000L<<10; limit++) {
-            var job = this.geometryUpdateQueue.poll();
+        long uploadReserve = Math.max(50_000_000L, this.geometryCapacity >>> 4);
+        for (int limit = 0; limit < 300 && !this.geometryAllocationStalled && ((this.geometryCapacity-this.geometryManager.getGeometryUsedBytes())>uploadReserve) && estimatedGeometryUploadAmount<1_000L<<10; limit++) {
+            var job = this.geometryUpdateQueue.peek();
             if (job == null)
                 break;
+            if (!this.geometryManager.canUpload(job)) {
+                this.geometryAllocationStalled = true;
+                Logger.warn("Geometry upload paused until a contiguous allocation can be reclaimed");
+                break;
+            }
+            job = this.geometryUpdateQueue.poll();
+            try {
+                this.manager.processGeometryResult(job);
+            } catch (BasicAsyncGeometryManager.GeometryCapacityException e) {
+                this.geometryUpdateQueue.addFirst(job);
+                this.geometryAllocationStalled = true;
+                Logger.warn("Geometry upload paused until fragmented space is reclaimed: " + e.getMessage());
+                break;
+            }
             workDone++;
-            this.manager.processGeometryResult(job);
             if (job.geometryBuffer!=null) {
                 estimatedGeometryUploadAmount += job.geometryBuffer.size;
             }
@@ -294,11 +309,13 @@ public class AsyncNodeManager {
         }
 
 
+        boolean removedGeometry = false;
         do {
             var job = this.removeBatchQueue.poll();
             if (job == null)
                 break;
             workDone++;
+            removedGeometry = true;
             long ptr = job.address;
             int zeroCount = 0;
             for (int i = 0; i < NodeCleaner.OUTPUT_COUNT; i++) {
@@ -320,6 +337,10 @@ public class AsyncNodeManager {
             job.free();
         } while (true);
 
+        if (removedGeometry) {
+            this.geometryAllocationStalled = false;
+        }
+
         if (this.workCounter.addAndGet(-workDone) < 0) {
             try {
                 Thread.sleep(1000);
@@ -334,6 +355,9 @@ public class AsyncNodeManager {
         }
 
         if (workDone == 0) {//Nothing happened, which is odd, but just return
+            if (this.geometryAllocationStalled) {
+                LockSupport.parkNanos(1_000_000L);
+            }
             //Should probably log that nothing happened, at least once
             return;
         }
@@ -626,6 +650,10 @@ public class AsyncNodeManager {
 
     public long getGeometryCapacity() {
         return this.geometryCapacity;
+    }
+
+    public boolean isGeometryAllocationStalled() {
+        return this.geometryAllocationStalled;
     }
 
 

@@ -123,7 +123,11 @@ public class SoftwareRasterizer {
         float area = edge(v1, v2, v3);
 
         //Pretty sure this is how you check for winding order aswell (if area is negative its counterclockwise)
-        if (area<0 == this.cullBackFace) {
+        // Cutout cards (vines, flowers, bars and similar modded geometry) are
+        // rendered from both sides in-world. Preserve that while baking; solid
+        // and translucent cubes continue to use normal face culling.
+        int meta = Float.floatToRawIntBits(this.a1.x);
+        if ((meta & 1) == 0 && (area<0 == this.cullBackFace)) {
             return;
         }
 

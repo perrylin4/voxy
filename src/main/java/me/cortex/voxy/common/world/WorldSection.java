@@ -38,10 +38,35 @@ public final class WorldSection {
     }
 
 
-    //TODO: should make it dynamically adjust the size allowance based on memory pressure/WorldSection allocation rate (e.g. is it doing a world import)
-    private static final int ARRAY_REUSE_CACHE_SIZE = 400;//500;//32*32*32*8*ARRAY_REUSE_CACHE_SIZE == number of bytes
+    public static final int DEFAULT_ARRAY_POOL_ARRAYS = 400;
+    private static volatile int ARRAY_REUSE_CACHE_SIZE = DEFAULT_ARRAY_POOL_ARRAYS;//500;//32*32*32*8*ARRAY_REUSE_CACHE_SIZE == number of bytes
+
+    public static void setArrayPoolCapMiB(int miB) {
+        int arrays = Math.max(miB, 0) * 4;//4 arrays per MiB
+        if (arrays != ARRAY_REUSE_CACHE_SIZE) {
+            ARRAY_REUSE_CACHE_SIZE = arrays;
+            //A shrink has to release the excess itself: returns above the cap are discarded, but
+            //nothing takes from the pool while the camera is still, so it would stay full
+            trimArrayPool(arrays);
+        }
+    }
+
+    //Drops pooled arrays until at most `keep` remain. Poll-then-decrement, the same order as
+    //materialize(), so the count invariant holds against concurrent releasers.
+    public static void trimArrayPool(int keep) {
+        while (ARRAY_REUSE_CACHE_COUNT.get() > keep) {
+            if (ARRAY_REUSE_CACHE.poll() == null) {
+                break;
+            }
+            ARRAY_REUSE_CACHE_COUNT.decrementAndGet();
+        }
+    }
     //TODO: maybe just swap this to a ConcurrentLinkedDeque
     private static final AtomicInteger ARRAY_REUSE_CACHE_COUNT = new AtomicInteger(0);
+
+    public static int getReuseCacheCount() {
+        return ARRAY_REUSE_CACHE_COUNT.get();
+    }
     private static final ConcurrentLinkedDeque<long[]> ARRAY_REUSE_CACHE = new ConcurrentLinkedDeque<>();
 
 
@@ -54,9 +79,6 @@ public final class WorldSection {
 
     //Serialized states
     long metadata;
-    //null means UNIFORM: every voxel is uniformValue, and no 256KiB array is allocated at all. This is
-    //the common case (air above ground, solid underground, unexplored). Materialisation is one-way and
-    //happens on the first write that differs, so readers only ever need to snapshot this field once.
     volatile long[] data = null;
     volatile long uniformValue;
     //data == null is a legal state now (uniform), so it can no longer double as the released marker
@@ -116,11 +138,6 @@ public final class WorldSection {
         return this.data;
     }
 
-    //Returns the backing array, allocating and filling it with uniformValue if still uniform.
-    //Fast path is a plain volatile read - the lock is only ever taken for the one-time uniform ->
-    //materialized transition. A CAS-and-discard version wasted a full 32768 long fill on every lost
-    //race, and with ten mesh workers all reaching for the same shared neighbour that was ~10% of all
-    //materialisations.
     public long[] materialize() {
         long[] d = this.data;
         if (d != null) {
@@ -137,12 +154,10 @@ public final class WorldSection {
             long[] fresh = ARRAY_REUSE_CACHE.poll();
             if (fresh == null) {
                 fresh = new long[SECTION_VOLUME];
+                me.cortex.voxy.commonImpl.PerfStats.sectionArrayPoolMiss.increment();
             } else {
                 ARRAY_REUSE_CACHE_COUNT.decrementAndGet();
             }
-            //MUST fill before publishing: arrays out of the reuse pool are never cleared, so a reader
-            //that saw the array before the fill would render the previous section's voxels as ghost
-            //terrain. The release store pairs with the volatile read above.
             Arrays.fill(fresh, value);
             DATA_HANDLE.setRelease(this, fresh);
             me.cortex.voxy.commonImpl.PerfStats.sectionMaterialized.increment();
@@ -168,14 +183,6 @@ public final class WorldSection {
         return (next&1) != 0;
 
 
-        /*
-        int prev, next;
-        do {
-            prev = (int) ATOMIC_STATE_HANDLE.get(this);
-            next = ((prev&1) != 0)?prev+2:prev;
-        } while (!ATOMIC_STATE_HANDLE.compareAndSet(this, prev, next));
-        return (next&1) != 0;
-         */
     }
 
     public int acquire() {
@@ -251,14 +258,13 @@ public final class WorldSection {
             //Never materialised - nothing to return to the pool
             return;
         }
-        if (ARRAY_REUSE_CACHE_COUNT.get() < ARRAY_REUSE_CACHE_SIZE) {
+        if (ARRAY_REUSE_CACHE_COUNT.incrementAndGet() <= ARRAY_REUSE_CACHE_SIZE) {
             ARRAY_REUSE_CACHE.add(d);
-            ARRAY_REUSE_CACHE_COUNT.incrementAndGet();
+        } else {
+            ARRAY_REUSE_CACHE_COUNT.decrementAndGet();
+            me.cortex.voxy.commonImpl.PerfStats.sectionArrayPoolOverflow.increment();
         }
         this.data = null;
-        //Without this the section still answers isUniform() with whatever value it held before it was
-        //materialised, so a late read gets a plausible wrong voxel instead of an obvious failure -
-        //and a neighbour face slice would be filled with it wholesale.
         this.uniformValue = Mapper.AIR;
     }
 
@@ -289,8 +295,6 @@ public final class WorldSection {
         return (byte) NON_EMPTY_CHILD_HANDLE.get(this);
     }
 
-    //Updates this.nonEmptyChildren atomically with respect to the child passed in
-    // returns 0 if no change, 1 if it just updated and didnt do a major state change, 2 if it was a major state change (something -> nothing, nothing -> something)
     public int updateEmptyChildState(WorldSection child) {
         int childIdx = getChildIndex(child.x, child.y, child.z);
         byte msk = (byte) (1<<childIdx);

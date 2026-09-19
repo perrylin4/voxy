@@ -14,10 +14,6 @@ import static org.lwjgl.opengl.GL33C.glSamplerParameteri;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 import static org.lwjgl.opengl.GL45C.glCreateSamplers;
 
-//Sample the lightmap through a dedicated sampler rather than whatever state sampler unit 0 happens to
-//carry. LINEAR min/mag, CLAMP_TO_EDGE on all three axes; with the shader taking base level only, this
-//pins the lightmap's mip selection, which otherwise jitters at LOD range and shows as flickering blocks
-//under shaders.
 public class LightMapHelper {
     private static final int LM_SAMPLER = glCreateSamplers();
 

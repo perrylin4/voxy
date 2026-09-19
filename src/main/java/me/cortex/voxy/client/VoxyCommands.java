@@ -109,11 +109,6 @@ public class VoxyCommands {
                 .then(debug);
     }
 
-    //Live counters for the fork's optimizations - proves they are firing and by how much. Values
-    //accumulate across the session; run "/voxy debug perf reset" to zero them and watch a fresh window
-    //(e.g. reset, fly across a fresh chunk area, then check the biome/copycat cache hit rate).
-    //Reports what the fog mixin last captured and what finish() would do with it, so a report of
-    //"the LOD ignores blindness" can be pinned to a value rather than guessed at.
     private static int dumpFog(CommandContext<CommandSourceStack> ctx) {
         var mc = Minecraft.getInstance();
         var vrs = me.cortex.voxy.client.core.IGetVoxyRenderSystem.getNullable();
@@ -189,6 +184,10 @@ public class VoxyCommands {
 
     //Arms (or stops early) the per-frame occlusion recorder; the dump file lands in the game dir
     private static int occlusionCapture(CommandContext<CommandSourceStack> ctx, int seconds) {
+        if (!net.neoforged.fml.ModList.get().isLoaded("create")) {
+            ctx.getSource().sendSuccess(() -> Component.literal("create not loaded"), false);
+            return 0;
+        }
         String msg;
         if (me.cortex.voxy.client.compat.create.DistantOcclusionDebug.isActive()) {
             msg = me.cortex.voxy.client.compat.create.DistantOcclusionDebug.stopAndDump();
@@ -199,12 +198,6 @@ public class VoxyCommands {
         return 1;
     }
 
-    //Dumps the kinetic snapshot pipeline: config gates, draw counters, queue/sweep state, recent
-    //capture attempts (renderer + vertex counts) and the buckets near the camera. Run it standing at
-    //a broken machine: it distinguishes captured-nothing / captured-garbage / captured-but-not-drawn.
-    //The beacon index has to be verifiable before anything draws from it, or a missing beam is
-    //ambiguous between "never indexed" and "indexed but not rendered". Persistent=false means the
-    //storage stack has no aux table and the index is memory-only for this session.
     private static int dumpBeacons(CommandContext<CommandSourceStack> ctx) {
         var mc = net.minecraft.client.Minecraft.getInstance();
         var engine = WorldIdentifier.ofEngineNullable(mc.level);
@@ -236,11 +229,6 @@ public class VoxyCommands {
         return 1;
     }
 
-    //What the distant Create snapshots cost, split GPU vs CPU source. The ratio is the input to
-    //deciding which subsystems are worth moving to storage.
-    //Opens a timing window and reports it when it closes. Named sections rather than the pipeline's
-    //A..I samplers, and it covers ingest and storage - which is where a report of "every integration is
-    //off and it still drops frames" has to be answered, since those cannot be switched off.
     private static int profile(CommandContext<CommandSourceStack> ctx, int seconds) {
         if (me.cortex.voxy.commonImpl.VoxyProfile.isRunning()) {
             ctx.getSource().sendFailure(Component.literal("A profile is already running"));
@@ -305,12 +293,10 @@ public class VoxyCommands {
         return 1;
     }
 
-    //Splits "ship contraptions don't render" into its two possible worlds: exempt counters moving
-    //while the structure stays invisible means we let it through and the problem is past us
-    //(transform/depth); a renderer that is never even called clears our culls entirely.
     private static int dumpShipContraptions(CommandContext<CommandSourceStack> ctx) {
-        if (!net.neoforged.fml.ModList.get().isLoaded("create")) {
-            ctx.getSource().sendSuccess(() -> Component.literal("create not loaded"), false);
+        var modList = net.neoforged.fml.ModList.get();
+        if (!modList.isLoaded("create") || !modList.isLoaded("sable")) {
+            ctx.getSource().sendSuccess(() -> Component.literal("create and sable are required"), false);
             return 0;
         }
         String msg = me.cortex.voxy.client.compat.create.ShipContraptionDebug.dump();
@@ -319,10 +305,11 @@ public class VoxyCommands {
         return 1;
     }
 
-    //Dumps the client-side distant-train state: render gates plus every tracked train with sample
-    //age and distance. Zero tracked trains with a moving train 192-3072 blocks away means the
-    //server side is not sampling (old jar or no voxy on the server).
     private static int dumpTrains(CommandContext<CommandSourceStack> ctx) {
+        if (!net.neoforged.fml.ModList.get().isLoaded("create")) {
+            ctx.getSource().sendSuccess(() -> Component.literal("create not loaded"), false);
+            return 0;
+        }
         var cfg = me.cortex.voxy.client.config.VoxyConfig.CONFIG;
         var sb = new StringBuilder("distant trains: rendering=").append(cfg.isRenderingEnabled())
                 .append(" distantTrains=").append(cfg.distantTrains)
@@ -465,7 +452,9 @@ public class VoxyCommands {
         var instance = (VoxyClientInstance)VoxyCommon.getInstance();
         if (instance == null) return false;
         var wr = Minecraft.getInstance().levelRenderer;
-        me.cortex.voxy.client.compat.littletiles.LittleTilesDistantRenderer.checkpointActive();
+        if (net.neoforged.fml.ModList.get().isLoaded("littletiles")) {
+            me.cortex.voxy.client.compat.littletiles.LittleTilesDistantRenderer.checkpointActive();
+        }
         if (wr!=null) {
             ((IGetVoxyRenderSystem)wr).voxy$shutdownRenderer();
         }
@@ -639,18 +628,6 @@ public class VoxyCommands {
             if (!dimFile.isDirectory()) return 1;
             return fileBasedImporter(dimFile)?0:1;
             //We are in a world directory, so import the current dimension we are in
-            /*
-            for (var dim : new String[]{"overworld", "the_nether", "the_end"}) {//This is so annoying that you cant loop through all the dimensions
-                var id = ResourceKey.create(Registries.DIMENSION, Identifier.withDefaultNamespace(dim));
-                var dimPath = DimensionType.getStorageFolder(id, file);
-                dimPath = dimPath.resolve("region");
-                var dimFile = dimPath.toFile();
-                if (dimFile.isDirectory()) {//exists and is a directory
-                    if (!fileBasedImporter(dimFile)) {
-                        Logger.error("Failed to import dimension: " + id);
-                    }
-                }
-            }*/
         } else {
             if (!(name.endsWith("region"))) {
                 file = file.resolve("region");

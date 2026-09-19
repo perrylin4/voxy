@@ -13,9 +13,6 @@ public record RenderProperties(boolean isZero2One, boolean isReverseZ, boolean u
     public <T extends Shader.Builder<J>, J extends Shader> T apply(T builder) {
         return (T) builder.defineIf("USE_ZERO_ONE_DEPTH", this.isZero2One)
                 .defineIf("USE_REVERSE_Z", this.isReverseZ)
-                //Rasterized window depth is 0.5*ndc+0.5 under default clip control regardless of
-                //the projection's ndc range; shaders converting between sampled window depth and
-                //analytic ndc must apply this map or every mixed comparison carries a constant bias
                 .defineIf("WINDOW_HALF_NDC", windowIsHalfNdc());
     }
 
@@ -60,7 +57,6 @@ public record RenderProperties(boolean isZero2One, boolean isReverseZ, boolean u
             if (pipeData == null) {
                 return false;
             }
-            //return pipeData.useBlockAtlasUV;
             return false;
         }
         return false;

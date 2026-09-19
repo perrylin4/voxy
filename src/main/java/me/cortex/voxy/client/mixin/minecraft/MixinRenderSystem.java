@@ -11,7 +11,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.function.BiFunction;
 
-//Thanks iris for making me need todo this ;-; _irritater_
 @Mixin(value = RenderSystem.class, remap = false)
 public class MixinRenderSystem {
     //We need to inject before iris to initalize our systems

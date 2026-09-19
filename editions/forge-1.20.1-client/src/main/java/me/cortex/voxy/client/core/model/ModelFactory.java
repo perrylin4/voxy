@@ -111,6 +111,7 @@ public class ModelFactory {
     // this has an issue with scaffolding i believe tho, so maybe make it a probability to render??? idk
     private final long[] metadataCache;
     private final int[] fluidStateLUT;
+    private final byte[] vanillaFluidKinds;
 
     //Provides a map from id -> model id as multiple ids might have the same internal model id
     private final int[] idMappings;
@@ -148,6 +149,7 @@ public class ModelFactory {
 
         this.metadataCache = new long[1<<16];
         this.fluidStateLUT = new int[1<<16];
+        this.vanillaFluidKinds = new byte[1<<16];
         this.idMappings = new int[1<<20];//Max of 1 million blockstates mapping to 65k model states
         Arrays.fill(this.idMappings, -1);
         Arrays.fill(this.fluidStateLUT, -1);
@@ -421,6 +423,10 @@ public class ModelFactory {
         //TODO: add thing for `blockState.hasEmissiveLighting()` and `blockState.getLuminance()`
 
         boolean isFluid = blockState.getBlock() instanceof LiquidBlock;
+        byte vanillaFluidKind = !isFluid ? 0
+                : blockState.getFluidState().is(FluidTags.WATER) ? (byte) 1
+                : blockState.getFluidState().is(FluidTags.LAVA) ? (byte) 2
+                : 0;
         boolean leafModel = isLeafBlockState(blockState);
         boolean balancedLeaf = leafModel
                 && VoxyConfig.CONFIG.getLeafLodMode() == VoxyConfig.LeafLodMode.BALANCED;
@@ -455,6 +461,9 @@ public class ModelFactory {
             if (possibleDuplicate != -1) {//Duplicate found
                 this.idMappings[blockId] = possibleDuplicate;
                 modelId = possibleDuplicate;
+                if (vanillaFluidKind != 0) {
+                    this.vanillaFluidKinds[modelId] = vanillaFluidKind;
+                }
                 //Remove from flight
                 this.blockStatesInFlightLock.lock();
                 if (!this.blockStatesInFlight.remove(blockId)) {
@@ -473,6 +482,7 @@ public class ModelFactory {
 
         if (isFluid) {
             this.fluidStateLUT[modelId] = modelId;
+            this.vanillaFluidKinds[modelId] = vanillaFluidKind;
         } else if (clientFluidStateId != -1) {
             this.fluidStateLUT[modelId] = clientFluidStateId;
         }
@@ -592,6 +602,7 @@ public class ModelFactory {
             if (occludesFace) {
                 occludesFace &= ((float)writeCount)/(MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE) > 0.9;// only occlude if the face covers more than 90% of the face
             }
+            occludesFace &= faceCoversFullBlock;
             metadata |= occludesFace?1:0;
             fullyOpaque &= occludesFace;
 
@@ -653,6 +664,11 @@ public class ModelFactory {
 
         //block emission
         metadata |= ((long)getBlockLightEmission(blockState))<<(48+7);
+        FluidState fluidState = blockState.getFluidState();
+        int fluidHeight = isFluid
+                ? Math.max(1, Math.min(9, Math.round(fluidState.getOwnHeight() * 9.0f)))
+                : 0;
+        metadata |= ((long) fluidHeight) << 59;
 
         this.metadataCache[modelId] = metadata;
 
@@ -671,6 +687,7 @@ public class ModelFactory {
         modelFlags |= balancedLeaf ? 32 : 0;
         modelFlags |= isFluid && blockState.getFluidState().is(FluidTags.LAVA) ? 64 : 0;
         modelFlags |= leafModel ? 128 : 0;
+        modelFlags |= fluidHeight << 8;
 
         //modelFlags |= blockRenderLayer == RenderLayer.getSolid()?0:1;// should discard alpha
         MemoryUtil.memPutInt(uploadPtr, modelFlags); uploadPtr += 4;
@@ -1020,6 +1037,10 @@ public class ModelFactory {
             throw new IdNotYetComputedException(clientBlockStateId, false);
         }
         return map;
+    }
+
+    public int getVanillaFluidKind(int clientId) {
+        return this.vanillaFluidKinds[clientId];
     }
 
     public final long getModelMetadataFromClientId(int clientId) {

@@ -5,10 +5,6 @@ import me.cortex.voxy.client.compat.ShipBorne;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
 
-//State dump behind /voxy debug ship. Ship-borne contraptions cross six render/sync gates split over
-//four mods (see the sable compat classes); when one regresses, the per-entity readouts here - the
-//synced contraption size, EntityCulling's verdict, and sable's per-plot Flywheel state - identify the
-//broken layer without a round of instrumented builds.
 public final class ShipContraptionDebug {
     private ShipContraptionDebug() {}
 

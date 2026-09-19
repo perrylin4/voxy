@@ -1,15 +1,5 @@
 package me.cortex.voxy.client.compat.create;
 
-//What the distant Create snapshots actually cost, split into the two pools that behave differently:
-//GPU vertex bytes, which is what a residency bound has to spend, and CPU source bytes, which is what
-//moving a snapshot to storage would have to write.
-//
-//The ratio between them decides whether a subsystem is worth persisting at all. Contraption source is a
-//block list - small next to its mesh, so writing it out buys a lot of GPU back. Kinetic source is
-//mostly Snap.generic, a recorded vertex stream that cannot be re-derived once the block entity is gone
-//(catnip's SuperByteBuffer is empty outside the render pass), so it may be no smaller than the mesh it
-//produces. If it is not, persisting kinetics trades GPU pressure for disk and heap pressure and is not
-//worth doing - it should keep a memory bound and re-capture when the player returns instead.
 public final class CreateMemoryReport {
     private CreateMemoryReport() {}
 

@@ -39,7 +39,6 @@ public class FragmentedStorageBackendAdaptor extends StorageBackend {
         }
     }
 
-    //TODO: reencode the key to be shifted one less OR
     // use like a mix64 to shuffle the key in getSegmentId so that
     // multiple layers of spliced storage backends can be stacked
 
@@ -156,7 +155,6 @@ public class FragmentedStorageBackendAdaptor extends StorageBackend {
         for (var backend : this.backends) {
             var mappings = backend.getIdMappingsData();
             if (mappings.isEmpty()) {
-                //TODO: log a warning and attempt to replicate the data the other fragments
                 continue;
             }
             var repackaged = new Int2ObjectOpenHashMap<EqualingArray>(mappings.size());
@@ -229,7 +227,6 @@ public class FragmentedStorageBackendAdaptor extends StorageBackend {
         public StorageBackend build(ConfigBuildCtx ctx) {
             StorageBackend[] builtBackends = new StorageBackend[this.backends.size()];
             for (int i = 0; i < this.backends.size(); i++) {
-                //TODO: put each backend in a different folder?
                 builtBackends[i] = this.backends.get(i).build(ctx);
             }
             return new FragmentedStorageBackendAdaptor(builtBackends);

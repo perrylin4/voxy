@@ -62,15 +62,9 @@ public abstract class MixinClientLevel {
     private void voxy$injectIngestOnStateChange(BlockPos pos, BlockState old, BlockState updated, CallbackInfo cir) {
         if (old == updated) return;
 
-        //Domum Ornamentum asks for a model-data rebuild by calling setBlocksDirty(pos, AIR, state) - the
-        //block itself never changes, only the materials stored on its block entity. That is invisible to
-        //both tests below (the state is not air, and the block need not sit on a section border), so
-        //without this a colonist re-texturing a Domum block leaves the LOD showing the old materials
-        //forever. Catch the notification instead of polling block entities every tick.
         boolean domumUpdate = DomumOrnamentumCompat.isDomumState(old)
                 || DomumOrnamentumCompat.isDomumState(updated);
 
-        //TODO: is this _really_ needed, we should have enough processing power to not need todo it if its only a
         // block removal
         if (!domumUpdate && !updated.isAir()) return;
         if (VoxyCommon.getInstance()==null) return;

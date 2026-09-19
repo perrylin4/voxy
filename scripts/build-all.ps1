@@ -6,8 +6,7 @@ Get-ChildItem -LiteralPath $dist -Filter '*.jar' -File -ErrorAction SilentlyCont
     Remove-Item -Force
 
 $editions = @(
-    'integrations-1.21.1',
-    'client-1.21.1',
+    'neoforge-1.21.1',
     'client-1.20.1',
     'client-26.1.2'
 )

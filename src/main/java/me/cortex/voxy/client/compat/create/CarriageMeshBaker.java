@@ -12,24 +12,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-//Bakes a carriage block list into a single mesh in the distant vertex format - straight from the
-//block models' BakedQuad assets, no vanilla vertex pipeline anywhere. Distant carriages draw as
-//one rigid mesh with a pose transform, so all the per-block work happens exactly once per shape.
 public final class CarriageMeshBaker {
     private CarriageMeshBaker() {}
 
-    //Create types appear only in the kinetic-partial branch of the bake. The train shape payload
-    //handler registers unconditionally, so a Create-less client must still bake the static geometry;
-    //without this gate every kinetic block throws a swallowed NoClassDefFoundError per block instead
-    //of skipping cleanly.
+    //Keep optional Create types behind a local guard as a second line of defence for stored meshes.
     private static final boolean CREATE_LOADED =
             net.neoforged.fml.ModList.get() != null && net.neoforged.fml.ModList.get().isLoaded("create");
 
-    //The shape grid dressed up as a level slice: connected-texture model wrappers (casings, glass,
-    //framed blocks) resolve their ModelData by querying neighbouring block states, and biome colour
-    //resolvers ask for a tint - answered from the grid and from the real level at the camera (the
-    //shape is baked near where it was seen, so the camera biome is the honest choice). Light queries
-    //borrow the real engine; nothing here is expected to ask it during getModelData.
     private record GridSlice(Map<BlockPos, BlockState> grid) implements net.minecraft.world.level.BlockAndTintGetter {
         @Override
         public BlockState getBlockState(BlockPos pos) {
@@ -132,10 +121,6 @@ public final class CarriageMeshBaker {
                 //colour (grass on a snowy-plains train is pale, not default green); -1 = no resolver.
                 int tint = Minecraft.getInstance().getBlockColors().getColor(state, slice, pos, 0);
                 var model = dispatcher.getBlockModel(state);
-                //Connected-texture wrappers resolve their connections against the shape itself.
-                //Copycats read their material from block entity data the grid cannot supply - feed
-                //the recovered (or skeleton-fallback) data through as the block entity's share so
-                //the wrapper's own getModelData still gets to derive occlusion from the slice.
                 var beData = blockEntityData == null ? null : blockEntityData.get(pos);
                 if (beData == null && me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.isCopycatState(state)) {
                     beData = me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.materialFromContraptionNbt(state, null);
@@ -148,20 +133,13 @@ public final class CarriageMeshBaker {
                     modelData = beData != null ? beData : net.neoforged.neoforge.client.model.data.ModelData.EMPTY;
                 }
                 //Carriages move through the sky; bake at full skylight and dim per-draw
+                boolean fullBlock = DistantFaceCulling.isFullBlock(state, slice, pos);
                 builder.blockModel(state, model,
                         pos.getX(), pos.getY(), pos.getZ(), 15, 0,
                         direction -> {
                             var neighbor = grid.get(cursor.setWithOffset(pos, direction));
-                            return neighbor != null && neighbor.canOcclude();
+                            return fullBlock && DistantFaceCulling.isFullBlock(neighbor, slice, cursor);
                         }, tint == -1 ? 0xFFFFFF : tint, modelData);
-                //Kinetic moving parts: Create swaps shaft/cog baked models for a wrapper that answers
-                //the per-layer chunk path with nothing (the BER/visual owns them live), so the
-                //emission above produced zero quads for them. The vanilla 3-arg getQuads is the one
-                //query the wrapper does not override - bake the real rotating json through it, at the
-                //offset-only t=0 angle every frozen drivetrain part shares, evaluated at the
-                //contraption-LOCAL position (which is exactly the position Create's own on-contraption
-                //block entities use). The chunk-visibility gate keeps statics out: a json the emission
-                //above already drew must not appear twice, spun.
                 if (CREATE_LOADED && state.getBlock() instanceof com.simibubi.create.content.kinetics.base.IRotate rotate) {
                     if (state.getBlock() instanceof com.simibubi.create.content.contraptions.gantry.GantryCarriageBlock) {
                         KineticSnapshots.bakeGantryCarriage(builder, kineticTransform, state, pos,
@@ -184,9 +162,6 @@ public final class CarriageMeshBaker {
             }
         }
 
-        //build() owns the staging buffer only once it returns; a throw on the way through leaves the
-        //memAlloc'd buffer with no owner, and this runs every tick for a contraption that keeps failing.
-        //KineticSnapshots.rebake already guards its build the same way.
         DistantMesh mesh;
         try {
             mesh = builder.build();

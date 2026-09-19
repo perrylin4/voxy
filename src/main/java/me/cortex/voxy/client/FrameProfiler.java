@@ -12,21 +12,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-//Records what voxy costs per frame while the player moves around, then writes a report. Built for the
-//"it drops frames and I do not know which part" case: rather than guess from a static read of the code,
-//sample the timers the render system already keeps and let the distribution say where the time goes.
-//
-//Per frame it takes the cheap numbers only (wall time + the CPU stage timers). The full subsystem debug
-//text - queue depths, geometry residency, node counts - is far more expensive to build, so that is
-//sampled a few times a second. Everything is buffered in memory and written once on stop, so the
-//capture itself does not add IO to the frames it is measuring.
 public final class FrameProfiler {
     private FrameProfiler() {}
 
     private static final int SNAPSHOT_INTERVAL_MS = 500;
-    //A frame this long is a stall, not a slow frame - grab the render thread's stack while it is still
-    //in whatever was blocking. This is the one thing an external sampling profiler cannot give us,
-    //because it cannot know which of its samples landed inside a bad frame.
     private static final long STALL_THRESHOLD_MICROS = 40_000;
     private static final int MAX_STALL_CAPTURES = 40;
 
@@ -95,10 +84,6 @@ public final class FrameProfiler {
         frameStartNanos = System.nanoTime();
     }
 
-    //The watchdog can only see a stall while frameStartNanos is set, i.e. inside voxy's own render
-    //window. A frame can also overrun outside it (vanilla, the shader pack, buffer swap), so keep the
-    //window open from the end of one voxy render to the start of the next and label which side a
-    //capture came from. Without this the report silently under-reports whole classes of stall.
     private static volatile boolean insideVoxyRender;
 
     //Samples the render thread while a frame is overrunning. getStackTrace on another thread is a
@@ -122,9 +107,6 @@ public final class FrameProfiler {
                 return;
             }
             long elapsedMicros = (System.nanoTime() - start) / 1000;
-            //Past ten seconds this is either a genuine hitch (dimension load, pack reload) or a stale
-            //frameStartNanos from a render loop that stopped without the thread dying. Neither is worth
-            //a stack, and neither means the capture is over - stay alive and wait for the next frame.
             if (elapsedMicros > 10_000_000) {
                 continue;
             }
@@ -179,10 +161,6 @@ public final class FrameProfiler {
                     micros(TimingStatistics.B),
                     micros(TimingStatistics.C),
             });
-            //The render thread's own stack is worthless here - the stall is already over and it would
-            //only show this method. The watchdog samples it mid-stall instead. What is worth recording
-            //at this point is what voxy's workers were doing, since an idle worker set during a stall
-            //rules them out as the cause.
             if (frameMicros >= STALL_THRESHOLD_MICROS) {
                 synchronized (FrameProfiler.class) {
                     if (stalls.size() < MAX_STALL_CAPTURES) {

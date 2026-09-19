@@ -12,10 +12,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//Streams every section sodium's render-list traversal visits into the chunk bound mask. All visit
-//paths (tree, occlusion, coordinate) funnel through this private overload, so the mask ends up
-//covering exactly what sodium draws - unbuilt sections stay unmasked (LOD shows through instead of
-//a hole) and shadow-pass traversals are ignored (the mask describes the player view only).
 @Mixin(value = SectionCollector.class, remap = false)
 public class MixinSectionCollector {
     @Inject(method = "visit(Lnet/caffeinemc/mods/sodium/client/render/chunk/RenderSection;I)V", at = @At("HEAD"))

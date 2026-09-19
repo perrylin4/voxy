@@ -139,7 +139,7 @@ tasks.named('remapJar') {
 }
 
 def slimJarOutput = layout.buildDirectory.file(
-        "libs/${project.archives_base_name}-${project.mod_version}-forge-client.jar")
+        "libs/${project.archives_base_name}-${project.mod_version}-mc1.20.1-forge-client.jar")
 
 tasks.register('slimJar') {
     group = 'build'

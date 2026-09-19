@@ -1,7 +1,6 @@
 package me.cortex.voxy.compat.far;
 
 import me.cortex.voxy.client.config.VoxyConfig;
-import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -46,15 +45,15 @@ public final class FarEntityClient {
     }
 
     static boolean isEnabled() {
-        return (VoxyConfig.CONFIG.enableFarPlayerRendering
+        return me.cortex.voxy.client.ServerCapabilities.farEntities()
+                && (VoxyConfig.CONFIG.enableFarPlayerRendering
                 || VoxyConfig.CONFIG.enableFarVehicleRendering)
                 && VoxyConfig.CONFIG.isRenderingEnabled()
                 && !ModList.get().isLoaded("seeu");
     }
 
     public static void sendHello() {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.getConnection() == null) {
+        if (!me.cortex.voxy.client.ServerCapabilities.farEntities()) {
             return;
         }
         PacketDistributor.sendToServer(new FarEntityProtocol.HelloPayload(new FarEntityProtocol.Hello(

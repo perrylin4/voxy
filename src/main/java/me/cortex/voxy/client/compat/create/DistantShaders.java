@@ -15,27 +15,23 @@ import static org.lwjgl.opengl.GL20C.nglUniformMatrix4fv;
 import static org.lwjgl.opengl.GL33C.glBindSampler;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 
-//Programs and binding helpers for the distant mesh pipeline. Compiled lazily on the render thread.
-//On the iris pipeline the fragment shader gets the shader pack's voxy patch appended
-//(patchOpaqueShader), so our fragments write the full g-buffer exactly like LOD terrain - the
-//shader pack's existing voxy support covers us with no per-pack work.
 public final class DistantShaders {
     private static Shader vertexLight;
     private static Shader uniformLight;
+    private static Shader depthOnly;
 
     private static Shader patchedVertexLight;
     private static Shader patchedUniformLight;
+    private static Shader translucentVertexLight;
+    private static Shader patchedTranslucentVertexLight;
+    private static AbstractRenderPipeline translucentPatchedOwner;
+    private static boolean translucentPatchFailed;
     private static AbstractRenderPipeline patchedOwner;
     private static boolean patchAvailable;
     private static boolean patchFailed;
 
     private DistantShaders() {}
 
-    //Compile both patched variants up front. glLinkProgram blocks the render thread for hundreds of
-    //milliseconds on some drivers, and compiling lazily meant that landed mid-gameplay, the first time
-    //a distant train/track/contraption came into view - a frame capture caught the render thread inside
-    //glLinkProgram here on a 523ms frame. Called during renderer init, where a stall is behind the
-    //loading screen. Failure is not fatal: forPipeline still falls back to the unpatched shaders.
     public static void warmup(AbstractRenderPipeline pipeline) {
         if (!net.neoforged.fml.ModList.get().isLoaded("create")) {
             return;
@@ -50,9 +46,6 @@ public final class DistantShaders {
 
     //uniformLightVariant: per-draw light uniform (moving carriages) vs per-vertex baked light (tracks)
     public static Shader forPipeline(AbstractRenderPipeline pipeline, boolean uniformLightVariant) {
-        //Patch content follows the pipeline instance (i.e. the loaded shader pack). Probe the pack's
-        //voxy patch ONCE per pipeline instead of building + discarding the multi-KB patch string every
-        //frame - a pack reload swaps the pipeline instance, which re-triggers this block.
         if (patchedOwner != pipeline) {
             freePatched();
             patchedOwner = pipeline;
@@ -85,14 +78,56 @@ public final class DistantShaders {
         }
     }
 
+    public static Shader forTranslucentPipeline(AbstractRenderPipeline pipeline) {
+        if (translucentPatchedOwner != pipeline) {
+            if (patchedTranslucentVertexLight != null) patchedTranslucentVertexLight.free();
+            patchedTranslucentVertexLight = null;
+            translucentPatchedOwner = pipeline;
+            translucentPatchFailed = false;
+        }
+        if (!translucentPatchFailed) {
+            try {
+                if (patchedTranslucentVertexLight == null) {
+                    String source = ShaderLoader.parse("voxy:compat/distant.frag");
+                    String fragment = pipeline.patchTranslucentShader(null, source);
+                    if (fragment == null) fragment = pipeline.patchOpaqueShader(null, source);
+                    if (fragment != null) {
+                        patchedTranslucentVertexLight = Shader.make()
+                                .define("PATCHED_SHADER").define("TRANSLUCENT")
+                                .addSource(ShaderType.VERTEX, patchedVertex(pipeline))
+                                .addSource(ShaderType.FRAGMENT, fragment)
+                                .compile().name("distant_patched_translucent_vertex");
+                    }
+                }
+                if (patchedTranslucentVertexLight != null) return patchedTranslucentVertexLight;
+            } catch (Throwable e) {
+                translucentPatchFailed = true;
+                Logger.error("Failed to compile shader-pack patched translucent distant shader", e);
+            }
+        }
+        if (translucentVertexLight == null) {
+            translucentVertexLight = Shader.make().define("TRANSLUCENT")
+                    .add(ShaderType.VERTEX, "voxy:compat/distant.vert")
+                    .add(ShaderType.FRAGMENT, "voxy:compat/distant.frag")
+                    .compile().name("distant_translucent_vertex_light");
+        }
+        return translucentVertexLight;
+    }
+
     private static Shader compilePatched(AbstractRenderPipeline pipeline, boolean uniformLightVariant) {
         String frag = pipeline.patchOpaqueShader(null, ShaderLoader.parse("voxy:compat/distant.frag"));
         return Shader.make()
                 .define("PATCHED_SHADER")
                 .defineIf("UNIFORM_LIGHT", uniformLightVariant)
-                .add(ShaderType.VERTEX, "voxy:compat/distant.vert")
+                .addSource(ShaderType.VERTEX, patchedVertex(pipeline))
                 .addSource(ShaderType.FRAGMENT, frag)
                 .compile().name(uniformLightVariant ? "distant_patched_uniform" : "distant_patched_vertex");
+    }
+
+    private static String patchedVertex(AbstractRenderPipeline pipeline) {
+        String source = ShaderLoader.parse("voxy:compat/distant.vert");
+        String taa = pipeline.taaFunction("distantTaaShift");
+        return source + "\n" + (taa != null ? taa : "vec2 distantTaaShift() { return vec2(0.0); }");
     }
 
     private static void freePatched() {
@@ -125,6 +160,16 @@ public final class DistantShaders {
                     .compile().name("distant_uniform_light");
         }
         return uniformLight;
+    }
+
+    public static Shader depthOnly() {
+        if (depthOnly == null) {
+            depthOnly = Shader.make()
+                    .add(ShaderType.VERTEX, "voxy:compat/distant.vert")
+                    .add(ShaderType.FRAGMENT, "voxy:compat/distant_depth.frag")
+                    .compile().name("distant_depth_only");
+        }
+        return depthOnly;
     }
 
     //Raw binds; the surrounding renderStateGuarded restores whatever was here before

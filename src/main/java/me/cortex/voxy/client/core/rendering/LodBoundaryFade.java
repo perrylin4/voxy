@@ -37,11 +37,6 @@ public final class LodBoundaryFade {
         int length = config.lodBoundaryFadeLength;
         int inset = config.lodBoundaryInset;
         int buffer = config.lodBoundaryBuffer;
-        // The circular ownership mask currently applies to opaque terrain. Water remains on the
-        // normal translucent chunk-depth path, so keeping the mask active while the camera is in
-        // a fluid lets opaque LOD replace the water column before its surface can be composited.
-        // Fall back to Voxy's original chunk handoff underwater; this is a single camera-state read
-        // per frame and avoids adding any world scans or fluid-specific draw passes.
         var camera = minecraft.gameRenderer.getMainCamera();
         boolean submerged = camera.getFluidInCamera() != FogType.NONE;
         boolean detachedCamera = minecraft.player != null
@@ -66,9 +61,6 @@ public final class LodBoundaryFade {
         cachedDetachedCamera = detachedCamera;
 
         float vanillaDistance = renderDistance * 16.0f;
-        // Free-camera mods move Camera without moving the player/chunk loading centre. A circular
-        // camera-centred cutout would then reserve empty space for vanilla chunks that are not there.
-        // The depth-based legacy handoff follows the chunks actually rendered and is safe here.
         if (!enabled || submerged || detachedCamera) {
             return cachedDistances = new Distances(vanillaDistance, vanillaDistance);
         }

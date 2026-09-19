@@ -23,11 +23,6 @@ import static org.lwjgl.opengl.GL20C.glUniform2f;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 
-//Draws the frozen distant-contraption snapshots (see DistantContraptionManager) as static rigid
-//meshes inside the LOD pipeline, exactly where the vanilla/Flywheel render stops. A snapshot's stored
-//`local` is already the full applyLocalTransforms matrix, so the draw is just VP · translate(pos-cam)
-//· local - no per-subclass rebuild. Same distant vertex format, stencil tag and light-uniform path as
-//the train renderer; occlusion against LOD terrain is per-pixel via the shared depth.
 public final class DistantContraptionRenderer implements LodPipelineHooks.Renderer {
     public static volatile int lastFrameDrawn;
 
@@ -40,10 +35,6 @@ public final class DistantContraptionRenderer implements LodPipelineHooks.Render
             return;
         }
         var cam = mc.gameRenderer.getMainCamera().getPosition();
-        //LOD radius (capped by distantContraptionMaxChunks), not the vanilla render distance: loaded
-        //contraptions past the view distance (deep-mine machines below a short render distance) still
-        //refresh so they animate in the LOD. Same cap the draw uses, so we never snapshot what we will
-        //not draw.
         double maxDist = VoxyConfig.CONFIG.createRenderDistance(VoxyConfig.CONFIG.distantContraptionMaxChunks);
         DistantContraptionManager.update(mc.level, cam.x, cam.y, cam.z, maxDist);
     }
@@ -53,11 +44,6 @@ public final class DistantContraptionRenderer implements LodPipelineHooks.Render
         DistantContraptionManager.clearAll();
     }
 
-    //No removal-event handling: on the client a real disassembly and the server's entity tracker
-    //letting go both arrive as the same DISCARDED removal, and tracking ranges vary per server, so any
-    //distance heuristic here guesses wrong somewhere. Presence-based cleanup in the manager's update
-    //covers disassembly instead: very near the player the entity is always tracked, so a snapshot with
-    //no live entity there is a structure that no longer exists.
 
     @Override
     public void render(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline, Viewport<?> viewport, int depthFunc) {
@@ -106,18 +92,6 @@ public final class DistantContraptionRenderer implements LodPipelineHooks.Render
                 if (distSq > maxDistSq) {
                     continue;
                 }
-                //When the live pipeline truly draws the entity this frame, ownership must be decided
-                //by the same predicate, sample source and camera as the live render's own cull
-                //(MixinContraptionEntityRenderer): entity inside the reach - live draws, snapshot
-                //yields; beyond - live is cancelled, snapshot holds. Any other sample straddles the
-                //boundary against it, and every crossing then doubles the structure inward and
-                //blanks it outward. Present-but-hidden (EntityCulling culled it and a visual culler
-                //dropped its Flywheel visual) falls through to the stand-in: inside the reach the
-                //manager refreshes anchor and pose every tick, so the copy is positionally honest
-                //even for a mover. The moved-suppression applies only to truly ABSENT entities -
-                //there the anchor is a stale mid-travel pose the real structure left when tracking
-                //cut off, and its disassembly packet went to clients that no longer include this
-                //one. Past the reach the leave-behind holds either way.
                 var live = DistantContraptionManager.trackedEntity(snapEntry.getKey(), snap);
                 if (live != null && !DistantContraptionManager.hiddenThisFrame(live)) {
                     if (live.position().distanceToSqr(entityCam) <= reachSq) {
@@ -127,9 +101,6 @@ public final class DistantContraptionRenderer implements LodPipelineHooks.Render
                         && !DistantContraptionManager.hasFreshRemotePose(snap, nowNanos)) {
                     continue;
                 }
-                //Before any state setup, so a frame with every contraption behind the camera never binds
-                //the shader. The bounds are contraption-local and the frozen pose can rotate them, hence
-                //going through the transform rather than testing an axis-aligned box at the origin.
                 if (viewport != null && !DistantVisibility.isTransformedBoxVisible(
                         viewport, snap.local(), snap.x(), snap.y(), snap.z(), snap.mesh().localBounds)) {
                     continue;

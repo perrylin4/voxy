@@ -34,10 +34,6 @@ public abstract class MixinSableDepthShim {
             float partialTicks,
             CallbackInfo ci
     ) {
-        //This fires once per chunk layer, ~5 times a frame, and the shim costs four gl_FragDepth passes
-        //each time - which also defeat early-Z for the pass. With no sub-level present there is nothing
-        //whose depth could need merging, so skip it. Only ever reachable with a shaderpack loaded: that
-        //is the sole condition under which the depth texture is non-zero.
         this.voxy$shimActive = subLevels != null && subLevels.iterator().hasNext() && ShipBorne.anyShipPresent();
         if (!this.voxy$shimActive) {
             return;

@@ -3,15 +3,6 @@ package me.cortex.voxy.client.compat.create;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import org.joml.Matrix4f;
 
-//Frustum rejection for the distant Create renderers. They walked their whole snapshot table every frame
-//and submitted a draw for anything inside the render radius, so machinery behind the camera cost exactly
-//as much as machinery in front of it. That was invisible while the radius was small and stopped being so
-//once it was corrected to cover the full LOD distance.
-//
-//Viewport.frustum is a JOML FrustumIntersection built from MVP, and MVP consumes camera-relative world
-//coordinates - the same space these renderers already translate their transforms into. So the test takes
-//world coordinates and subtracts the camera, with no involvement from the section/innerTranslation split
-//that the GPU traversal path uses.
 public final class DistantVisibility {
     private DistantVisibility() {}
 
@@ -27,9 +18,6 @@ public final class DistantVisibility {
         return viewport.frustum.testAab(x0, y0, z0, x1, y1, z1);
     }
 
-    //A snapshot's bounds are in contraption-local space and the pose can rotate them, so the eight
-    //corners go through the transform and the extent is taken from the result. Cheaper than it looks -
-    //this runs once per snapshot per frame, against a draw call it usually removes.
     public static boolean isTransformedBoxVisible(Viewport<?> viewport, Matrix4f local,
                                                   double originX, double originY, double originZ,
                                                   net.minecraft.world.phys.AABB localBounds) {

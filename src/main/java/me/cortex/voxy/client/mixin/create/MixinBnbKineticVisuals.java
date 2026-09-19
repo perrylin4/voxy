@@ -11,9 +11,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-//bits_n_bobs kinetic visuals that override beginFrame - the chain pulley animates its chain links each
-//frame, shadowing the base-class cull like Create's own machines do. Same treatment as
-//MixinKineticMachineVisuals; @Pseudo because the addon is optional (missing targets skip silently).
 @Pseudo
 @Mixin(targets = {
         "com.kipti.bnb.content.kinetics.chain_pulley.ChainPulleyVisual"

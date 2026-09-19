@@ -12,9 +12,6 @@ layout(location = 5) uniform vec4 fogColor;
 layout(location = 6) uniform int fogShape;
 layout(location = 7) uniform float fogIntensity;
 layout(location = 8) uniform float fogDensity;
-//1 while a vision-restricting medium owns the fog (blindness/darkness/water/lava/powder snow). Those
-//bands are vanilla's own linear ramp and the LOD has to match the terrain it borders, so the smoothstep
-//shaping that suits our wide ambient band is dropped.
 layout(location = 9) uniform int linearFog;
 #endif
 #endif
@@ -22,11 +19,6 @@ layout(location = 9) uniform int linearFog;
 #import <voxy:util/depthutils.glsl>
 #import <voxy:util/fog.glsl>
 
-//Sampled window depth <-> analytic ndc. Under default clip control rasterized window depth is
-//0.5*ndc+0.5 for the source's [0,1] projection and the destination's [-1,1] projection alike;
-//treating them as identical (the depthutils identity map) makes the two errors cancel only when
-//the destination never depth-tests the result against real geometry - against actual vanilla
-//depth the residue is a constant n/(f-n) too-far bias that grows to d^2/f blocks of lost range.
 #ifdef WINDOW_HALF_NDC
 #define SRC_WINDOW2NDC_DEPTH(d) ((d)*2.0f-1.0f)
 #define DST_NDC2WINDOW_DEPTH(z) ((z)*0.5f+0.5f)
