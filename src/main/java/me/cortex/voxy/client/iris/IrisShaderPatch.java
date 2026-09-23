@@ -17,6 +17,7 @@ import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.regex.Pattern;
@@ -24,8 +25,9 @@ import java.util.regex.Pattern;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL33.*;
 
+/** 解析光影包中的 Voxy 扩展，并在运行时提供绘制目标和混合状态。 */
 public class IrisShaderPatch {
-    public static final int VERSION = ((IntSupplier)()->1).getAsInt();
+    public static final int VERSION = ((IntSupplier) () -> 1).getAsInt();
     public static final int SHADER_DEFINE_VERSION = 3;
     private static final int LITE_CONTRACT_VERSION = 1;
     private static final Pattern LITE_CONTRACT = Pattern.compile(
@@ -54,6 +56,8 @@ public class IrisShaderPatch {
                 && me.cortex.voxy.client.config.VoxyConfig.CONFIG.enableLodBoundaryFade;
     }
 
+
+    // ---- 光影 JSON 反序列化 -------------------------------------------
 
     private static final class SSBODeserializer implements JsonDeserializer<Int2ObjectOpenHashMap<String>> {
         @Override
@@ -106,13 +110,13 @@ public class IrisShaderPatch {
     }
 
     public record BlendState(int buffer, boolean off, int sRGB, int dRGB, int sA, int dA) {
-        public static BlendState ALL_OFF = new BlendState(-1, true, 0,0,0,0);
+        public static BlendState ALL_OFF = new BlendState(-1, true, 0, 0, 0, 0);
     }
 
 
     private static final class BlendStateDeserializer implements JsonDeserializer<Int2ObjectMap<BlendState>> {
         private static int parseType(String type) {
-            type = type.toUpperCase();
+            type = type.toUpperCase(Locale.ROOT);
             if (!type.startsWith("GL_")) {
                 type = "GL_"+type;
             }
@@ -238,6 +242,8 @@ public class IrisShaderPatch {
 
 
 
+    // ---- 已解析补丁的访问器 -------------------------------------------
+
     private final PatchGson patchData;
     private final ShaderPack pack;
     private final Int2ObjectMap<String> ssbos;
@@ -304,13 +310,14 @@ public class IrisShaderPatch {
         return false;
     }
 
+    /** 创建延迟执行的 OpenGL 混合状态设置，调用顺序由渲染管线决定。 */
     public Runnable createBlendSetup() {
         if (this.patchData.blending == null || this.patchData.blending.isEmpty()) {
             return ()->{};
         }
         return ()->{
-            final var BS = this.patchData.blending;
-            var init = BS.getOrDefault(-1, null);
+            final var blendStates = this.patchData.blending;
+            var init = blendStates.getOrDefault(-1, null);
             if (init != null) {
                 if (init.off) {
                     glDisable(GL_BLEND);
@@ -319,7 +326,7 @@ public class IrisShaderPatch {
                     glBlendFuncSeparate(init.sRGB, init.dRGB, init.sA, init.dA);
                 }
             }
-            for (var entry:BS.int2ObjectEntrySet()) {
+            for (var entry : blendStates.int2ObjectEntrySet()) {
                 if (entry.getIntKey() == -1) continue;
                 final var s = entry.getValue();
                 if (s.off) {
@@ -336,6 +343,8 @@ public class IrisShaderPatch {
             .excludeFieldsWithModifiers(Modifier.PRIVATE)
             .setLenient()
             .create();
+
+    // ---- 补丁加载与 Lite shader 回退 ----------------------------------
 
     public static IrisShaderPatch makePatch(ShaderPack ipack, AbsolutePackPath directory, Function<AbsolutePackPath, String> sourceProvider) {
         boolean liteRequested = me.cortex.voxy.client.config.VoxyConfig.CONFIG.lodLiteShading;

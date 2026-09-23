@@ -13,6 +13,7 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
     private static boolean valkyrienSkiesInstalled;
     private static boolean nvidiumInstalled;
     private static boolean irisInstalled;
+    private static boolean createInstalled;
 
     @Override
     public void onLoad(String mixinPackage) {
@@ -20,6 +21,7 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
         nvidiumInstalled = VoxyCommon.getPlatformUtil().isModLoaded("nvidium");
         irisInstalled = VoxyCommon.getPlatformUtil().isModLoaded("iris")
                 || VoxyCommon.getPlatformUtil().isModLoaded("oculus");
+        createInstalled = VoxyCommon.getPlatformUtil().isModLoaded("create");
     }
 
     @Override
@@ -33,6 +35,13 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
             mixins.add("sodium.MixinSodiumWorldRendererVS");
         } else {
             mixins.add("sodium.MixinDefaultChunkRenderer");
+        }
+        if (createInstalled) {
+            mixins.add("create.MixinVisualizationManagerImpl");
+            mixins.add("create.AccessorAbstractEntityVisual");
+            mixins.add("create.MixinSafeBlockEntityRenderer");
+            mixins.add("create.MixinContraptionEntityRenderer");
+            mixins.add("create.MixinContraptionVisual");
         }
 
         return mixins;

@@ -11,17 +11,13 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
-/**
- * NeoForge config integration for Voxy.
- * Provides a built-in config screen accessible from the Mods menu.
- *
- * This wraps the existing VoxyConfig and syncs values between the two systems.
- */
+/** NeoForge Mods 菜单使用的客户端配置桥接，负责 TOML 与 VoxyConfig 双向同步。 */
 @EventBusSubscriber(modid = "voxy", bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
 public class VoxyNeoForgeConfig {
 
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
+    // ---- 基础渲染与线程 -----------------------------------------------
     private static final ModConfigSpec.BooleanValue ENABLED = BUILDER
             .comment("Enable Voxy LOD rendering system")
             .define("enabled", true);
@@ -81,6 +77,8 @@ public class VoxyNeoForgeConfig {
             .comment("Requested chunk radius. Higher values increase world-generation load.")
             .defineInRange("requestDistance", 48,
                     VoxyConfig.MIN_REQUEST_DISTANCE, VoxyConfig.MAX_REQUEST_DISTANCE);
+
+    // ---- 世界兼容与远景实体 -------------------------------------------
 
     private static final ModConfigSpec.IntValue EARTH_CURVE_RATIO = BUILDER
             .comment("World curvature effect - simulates standing on a spherical planet",
@@ -215,6 +213,7 @@ public class VoxyNeoForgeConfig {
         container.registerConfig(ModConfig.Type.CLIENT, SPEC, "voxy-client.toml");
     }
 
+    /** 从 NeoForge 配置快照写入运行时配置，并触发一次持久化。 */
     private static void syncToVoxyConfig() {
         VoxyConfig.CONFIG.enabled = ENABLED.get();
         VoxyConfig.CONFIG.enableRendering = ENABLE_RENDERING.get();
@@ -263,6 +262,7 @@ public class VoxyNeoForgeConfig {
         VoxyConfig.CONFIG.save();
     }
 
+    /** 将 VoxyConfig 的当前值回写到 NeoForge 配置，以保持 Mods 菜单一致。 */
     private static void syncFromVoxyConfig() {
         VoxyConfig.CONFIG.sanitize();
         ENABLED.set(VoxyConfig.CONFIG.enabled);
@@ -324,7 +324,7 @@ public class VoxyNeoForgeConfig {
         }
     }
 
-    // Getters for direct access (optional, can use VoxyConfig.CONFIG instead)
+    // ---- 少量只读访问器 ------------------------------------------------
     public static boolean isEnabled() {
         return ENABLED.get();
     }

@@ -39,6 +39,7 @@ import static org.lwjgl.opengl.GL42C.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT;
 import static org.lwjgl.opengl.GL42C.GL_TEXTURE_FETCH_BARRIER_BIT;
 import static org.lwjgl.opengl.GL42C.glMemoryBarrier;
 
+/** 无 Iris 接管时使用的默认 LOD 管线，负责 SSAO、雾效和最终合成。 */
 public class NormalRenderPipeline extends AbstractRenderPipeline {
     private GlTexture colourTex;
     private GlTexture colourSSAOTex;

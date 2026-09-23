@@ -15,21 +15,15 @@ import org.lwjgl.system.MemoryUtil;
 
 import java.util.Arrays;
 
-
+/** 将 32³ 世界区段转换为固定布局的 LOD 四边形缓冲。 */
 public class RenderDataFactory {
+    // 这些开关只用于验证或保留旧版实验路径，不能在热路径中动态改变。
     private static final boolean BUILD_OCCUPANCY_SET = false;
 
     private static final boolean CHECK_NEIGHBOR_FACE_OCCLUSION = true;
     private static final boolean DISABLE_CULL_SAME_OCCLUDES = false;
 
     private static final boolean VERIFY_MESHING = VoxyCommon.isVerificationFlagOn("verifyMeshing");
-
-    // instead of needing to regen the entire thing
-
-    //Ok so the idea for fluid rendering is to make it use a seperate mesher and use a different code path for it
-    // since fluid states are explicitly overlays over the base block
-    // can do funny stuff like double rendering
-
 
     private final WorldEngine world;
     private final ModelFactory modelMan;
@@ -39,13 +33,14 @@ public class RenderDataFactory {
 
     private final int[] opaqueMasks = new int[32*32];
     private final int[] nonOpaqueMasks = new int[32*32];
-    private final int[] fluidMasks = new int[32*32];//Used to separately mesh fluids, allowing for fluid + blockstate
+    // 流体单独建面，允许同一体素同时保留方块和流体覆盖层。
+    private final int[] fluidMasks = new int[32 * 32];
     private final short[] biomeIds = new short[32*32*32];
 
 
 
-    //Each axis gets a max quad count of 2^16 (65536 quads) since that is the max the basic geometry manager can handle
-    private final MemoryBuffer quadBuffer = new MemoryBuffer(8*(8*(1<<16)));//6 faces + dual direction + translucents
+    // 每个方向最多 65536 个四边形；布局由几何管理器和着色器共同约定。
+    private final MemoryBuffer quadBuffer = new MemoryBuffer(8 * (8 * (1 << 16)));
     private final long quadBufferPtr = this.quadBuffer.address;
     private final int[] quadCounters = new int[8];
     //Set when a bucket filled up and quads were dropped; reported once per build rather than per quad,
@@ -64,7 +59,7 @@ public class RenderDataFactory {
 
     private final OccupancySet occupancy;
 
-    //Wont work for double sided quads
+    // 扫描合并器只接收单面几何；双面/非不透明面走 secondaryBlockMesher。
     private final class Mesher extends ScanMesher2D {
         public int auxiliaryPosition = 0;
         public boolean doAuxiliaryFaceOffset = true;
@@ -197,11 +192,12 @@ public class RenderDataFactory {
     }
 
     private final Mesher blockMesher = new Mesher();
-    private final Mesher seondaryblockMesher = new Mesher();//Used for dual non-opaque geometry
+    private final Mesher secondaryBlockMesher = new Mesher();
 
     public RenderDataFactory(WorldEngine world, ModelFactory modelManager, boolean emitMeshlets) {
         this(world, modelManager, emitMeshlets, false);
     }
+    /** 创建一次性复用的建面工作区；工作线程只使用所属实例的数组。 */
     public RenderDataFactory(WorldEngine world, ModelFactory modelManager, boolean emitMeshlets, boolean generateOccupancy) {
         this.world = world;
         this.modelMan = modelManager;
@@ -212,7 +208,9 @@ public class RenderDataFactory {
         }
     }
 
-    private static long getQuadTyping(long metadata) {//2 bits
+    // ---- 元数据编码 -----------------------------------------------------
+
+    private static long getQuadTyping(long metadata) {
         return 0b111L&(0b000_000_010_100L>>(ModelQueries._isTranslucent(metadata)*6+ModelQueries._isDoubleSided(metadata)*3));
     }
 
@@ -229,6 +227,8 @@ public class RenderDataFactory {
     }
 
     private final int[] blendBiomeScratch = new int[15 * 15];
+
+    // ---- 区段准备和邻接数据 -------------------------------------------
 
     private void applyBiomeBlend(long[] raw, int neighborMsk, boolean neighborsLoaded) {
         int radius = me.cortex.voxy.client.config.VoxyConfig.CONFIG.biomeBlendRadius;
@@ -548,7 +548,9 @@ public class RenderDataFactory {
         return unavailableMsk;
     }
 
-    private static final long LM = (0xFFL<<55);
+    private static final long LM = (0xFFL << 55);
+
+    // ---- 流体描述和形状编码 -------------------------------------------
 
     private int fluidModelId(int voxelIndex) {
         long quad = this.sectionData[voxelIndex * 2];
@@ -706,6 +708,8 @@ public class RenderDataFactory {
         return quad;
     }
 
+    // ---- 面剔除与四边形编码 -------------------------------------------
+
     private static boolean shouldMeshNonOpaqueBlockFace(int face, long quad, long meta, long neighborQuad, long neighborMeta) {
         if (((quad^neighborQuad)&(0xFFFFL<<26))==0 && (DISABLE_CULL_SAME_OCCLUDES || ModelQueries.cullsSame(meta))) return false;
         if (!ModelQueries.faceExists(meta, face)) return false;//Dont mesh if no face
@@ -740,6 +744,8 @@ public class RenderDataFactory {
         final long BLKMSK = 0xFL<<59;
         return Math.max(a&SKYMSK, b&SKYMSK) | Math.max(a&BLKMSK, b&BLKMSK);
     }
+
+    // ---- Y/Z 方向几何 --------------------------------------------------
 
     private void generateYZOpaqueInnerGeometry(int axis) {
         for (int layer = 0; layer < 31; layer++) {
@@ -1091,12 +1097,12 @@ public class RenderDataFactory {
 
     private void generateYZNonOpaqueInnerGeometry(int axis) {
         //Note: think is ok to just reuse.. blockMesher
-        this.seondaryblockMesher.doAuxiliaryFaceOffset = false;
+        this.secondaryBlockMesher.doAuxiliaryFaceOffset = false;
         this.blockMesher.axis = axis;
-        this.seondaryblockMesher.axis = axis;
+        this.secondaryBlockMesher.axis = axis;
         for (int layer = 1; layer < 31; layer++) {//(should be 1->31, then have outer face mesher)
             this.blockMesher.auxiliaryPosition = layer;
-            this.seondaryblockMesher.auxiliaryPosition = layer;
+            this.secondaryBlockMesher.auxiliaryPosition = layer;
             int cSkip = 0;
             for (int other = 0; other < 32; other++) {
                 int pidx = axis == 0 ? (layer * 32 + other) : (other * 32 + layer);
@@ -1110,7 +1116,7 @@ public class RenderDataFactory {
                 }
 
                 this.blockMesher.skip(cSkip);
-                this.seondaryblockMesher.skip(cSkip);
+                this.secondaryBlockMesher.skip(cSkip);
                 cSkip = 0;
 
                 int cIdx = -1;
@@ -1120,7 +1126,7 @@ public class RenderDataFactory {
                     cIdx = index; //index--;
                     if (delta != 0) {
                         this.blockMesher.skip(delta);
-                        this.seondaryblockMesher.skip(delta);
+                        this.secondaryBlockMesher.skip(delta);
                     }
                     msk &= ~Integer.lowestOneBit(msk);
 
@@ -1130,28 +1136,28 @@ public class RenderDataFactory {
                         long A = this.sectionData[idx * 2];
                         long B = this.sectionData[idx * 2+1];
 
-                        meshNonOpaqueFace((axis<<1)|0, A, B, this.sectionData[(idx-skipAmount)*2], this.sectionData[(idx-skipAmount)*2+1], this.seondaryblockMesher);//-
+                        meshNonOpaqueFace((axis<<1)|0, A, B, this.sectionData[(idx-skipAmount)*2], this.sectionData[(idx-skipAmount)*2+1], this.secondaryBlockMesher);//-
                         meshNonOpaqueFace((axis<<1)|1, A, B, this.sectionData[(idx+skipAmount)*2], this.sectionData[(idx+skipAmount)*2+1], this.blockMesher);//+
                     }
                 }
                 this.blockMesher.endRow();
-                this.seondaryblockMesher.endRow();
+                this.secondaryBlockMesher.endRow();
             }
             this.blockMesher.finish();
-            this.seondaryblockMesher.finish();
+            this.secondaryBlockMesher.finish();
         }
     }
 
     private void generateYZNonOpaqueOuterGeometry(int axis) {
         //Note: think is ok to just reuse.. blockMesher
-        this.seondaryblockMesher.doAuxiliaryFaceOffset = false;
+        this.secondaryBlockMesher.doAuxiliaryFaceOffset = false;
         this.blockMesher.axis = axis;
-        this.seondaryblockMesher.axis = axis;
+        this.secondaryBlockMesher.axis = axis;
         for (int side = 0; side < 2; side++) {//-, +
             int layer = side == 0 ? 0 : 31;
             int skipAmount = (axis==0?32*32:32) * (1-(side*2));
             this.blockMesher.auxiliaryPosition = layer;
-            this.seondaryblockMesher.auxiliaryPosition = layer;
+            this.secondaryBlockMesher.auxiliaryPosition = layer;
             int cSkips = 0;
             for (int other = 0; other < 32; other++) {
                 int pidx = axis == 0 ? (layer * 32 + other) : (other * 32 + layer);
@@ -1162,7 +1168,7 @@ public class RenderDataFactory {
                 }
 
                 this.blockMesher.skip(cSkips);
-                this.seondaryblockMesher.skip(cSkips);
+                this.secondaryBlockMesher.skip(cSkips);
                 cSkips = 0;
 
                 int cIdx = -1;
@@ -1172,7 +1178,7 @@ public class RenderDataFactory {
                     cIdx = index; //index--;
                     if (delta != 0) {
                         this.blockMesher.skip(delta);
-                        this.seondaryblockMesher.skip(delta);
+                        this.secondaryBlockMesher.skip(delta);
                     }
                     msk &= ~Integer.lowestOneBit(msk);
 
@@ -1228,22 +1234,22 @@ public class RenderDataFactory {
                         }
 
                         if (ModelQueries.faceExists(Am, (axis<<1)|0) && ((side==0&&!fail) || (side==1&&!failB))) {
-                            this.seondaryblockMesher.putNext(applyQuadLight(
+                            this.secondaryBlockMesher.putNext(applyQuadLight(
                                     (long) (true ? 0L : 1L) |
                                     A |
                                     0,//(((0xFFL) & 0xFF) << 55)
                                     Am)
                             );
                         } else {
-                            this.seondaryblockMesher.skip(1);
+                            this.secondaryBlockMesher.skip(1);
                         }
                     }
                 }
                 this.blockMesher.endRow();
-                this.seondaryblockMesher.endRow();
+                this.secondaryBlockMesher.endRow();
             }
             this.blockMesher.finish();
-            this.seondaryblockMesher.finish();
+            this.secondaryBlockMesher.finish();
         }
     }
 
@@ -1281,6 +1287,8 @@ public class RenderDataFactory {
             }
         }
     }
+
+    // ---- X 方向几何 ----------------------------------------------------
 
     private static final long X_I_MSK = 0x4210842108421L;
 
@@ -2302,6 +2310,8 @@ public class RenderDataFactory {
         this.generateDirectFluidTops();
     }
 
+    // ---- 可选占用栅格与结果输出 ---------------------------------------
+
     private final int occupancyBarrier(int index) {
         int occ = 0;
         int msk = this.opaqueMasks[index];
@@ -2346,6 +2356,7 @@ public class RenderDataFactory {
     }
 
     //section is already acquired and gets released by the parent
+    /** 读取区段快照、生成所有方向面，并返回 GPU 上传所需的不可变结果。 */
     public BuiltSection generateMesh(WorldSection section) {
         if (section.isUniform() && Mapper.isAir(section.getUniformValue())) {
             return BuiltSection.emptyWithChildren(section.key, section.getNonEmptyChildren());
@@ -2366,8 +2377,8 @@ public class RenderDataFactory {
         {//Reset all the block meshes
             this.blockMesher.reset();
             this.blockMesher.doAuxiliaryFaceOffset = true;
-            this.seondaryblockMesher.reset();
-            this.seondaryblockMesher.doAuxiliaryFaceOffset = true;
+            this.secondaryBlockMesher.reset();
+            this.secondaryBlockMesher.doAuxiliaryFaceOffset = true;
             for (var mesher : this.xAxisMeshers) {
                 mesher.reset();
                 mesher.doAuxiliaryFaceOffset = true;
@@ -2496,6 +2507,7 @@ public class RenderDataFactory {
         return new BuiltSection(section.key, section.getNonEmptyChildren(), aabb, buff, offsets, occupancy);
     }
 
+    /** 释放固定四边形缓冲；调用后实例不可再次生成网格。 */
     public void free() {
         this.quadBuffer.free();
     }

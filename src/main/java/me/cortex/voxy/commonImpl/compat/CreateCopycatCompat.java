@@ -1,17 +1,18 @@
 package me.cortex.voxy.commonImpl.compat;
 
+import me.cortex.voxy.common.config.section.SectionStorage;
 import me.cortex.voxy.common.world.other.Mapper;
+import net.minecraft.client.renderer.ItemBlockRenderTypes;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.Tag;
-import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import me.cortex.voxy.common.config.section.SectionStorage;
-import me.cortex.voxy.commonImpl.compat.DisguiseStore;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.neoforged.neoforge.client.model.data.ModelData;
@@ -24,6 +25,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
+/** Copycats/Create 兼容层：把伪装材料映射为稳定的 Voxy 变体 ID。 */
 public final class CreateCopycatCompat {
     public static final String DISGUISE_TABLE = "disguise_copycat";
     public static final String VARIANT_TYPE = "create_copycat";
@@ -34,7 +36,7 @@ public final class CreateCopycatCompat {
 
     private static final ThreadLocal<SectionMappings> SECTION_MAPPINGS =
             ThreadLocal.withInitial(SectionMappings::new);
-    private static final Map<Mapper, Map<Integer, MaterialSet>> MATERIALS = new ConcurrentHashMap<>();
+    private static final Map<Mapper, Map<Integer, MaterialSet>> MATERIALS_BY_MAPPER = new ConcurrentHashMap<>();
     private static final Map<MaterialSet, MaterialKey> MATERIAL_KEYS = new ConcurrentHashMap<>();
     private static final String MATERIALS_KEY = "materials";
 
@@ -130,6 +132,8 @@ public final class CreateCopycatCompat {
     private CreateCopycatCompat() {
     }
 
+    // ---- 状态与区段映射 -----------------------------------------------
+
     public static boolean isLoaded() {
         return LOADED;
     }
@@ -142,6 +146,7 @@ public final class CreateCopycatCompat {
         return LOADED && model != null && COPYCATS_PLUS_MODELS.get(model.getClass());
     }
 
+    /** 在区段进入摄取流程时读取方块实体材料并写入持久化伪装表。 */
     public static void beginSection(Mapper mapper, SectionStorage storage, LevelChunk chunk, LevelChunkSection section, int sectionX, int sectionY, int sectionZ) {
         if (!LOADED) {
             return;
@@ -235,8 +240,7 @@ public final class CreateCopycatCompat {
         if (LOADED) SECTION_MAPPINGS.get().active = false;
     }
 
-    //The active section's per-voxel id map, or null when this section has none. Fetch once per section
-    //so the voxel loop can index it directly instead of a ThreadLocal.get per voxel.
+    // 每个区段只取一次 ThreadLocal 数组，体素热循环直接按索引读取。
     public static int[] activeSectionIds() {
         if (!LOADED) {
             return null;
@@ -245,7 +249,7 @@ public final class CreateCopycatCompat {
         return m.active ? m.ids : null;
     }
 
-    //Restore a stored variant on world load: the material NBT round-trips through the Mapper storage
+    // 世界加载时从 Mapper 存储恢复材料 NBT，保证变体 ID 可复现。
     public static void restoreVariant(Mapper mapper, int blockId, BlockState state, String variantType, CompoundTag data) {
         if (!LOADED || mapper == null || !VARIANT_TYPE.equals(variantType) || data == null || data.isEmpty()) {
             return;
@@ -259,9 +263,8 @@ public final class CreateCopycatCompat {
         }
     }
 
-    //Client only (called from the model bakery): the material's own chunk render type - the copycat
-    //wrapper model only emits quads when queried with the MATERIAL's layer, not the copycat's
-    public static net.minecraft.client.renderer.RenderType renderLayerOverride(Mapper mapper, int blockId, BlockState state) {
+    // 模型烘焙时使用材料自身的渲染层，Copycat 包装模型只在该层返回四边形。
+    public static RenderType renderLayerOverride(Mapper mapper, int blockId, BlockState state) {
         BlockState material = primaryMaterial(mapper, blockId);
         if (material == null) {
             material = baseMaterialFor(state);
@@ -270,20 +273,19 @@ public final class CreateCopycatCompat {
             return null;
         }
         try {
-            return net.minecraft.client.renderer.ItemBlockRenderTypes.getChunkRenderType(material);
+            return ItemBlockRenderTypes.getChunkRenderType(material);
         } catch (Throwable ignored) {
             return null;
         }
     }
 
-    //The material state drives block colour providers (grass/leaf copycats biome-tint like their material)
+    // 草方块、树叶等 Copycat 使用材料状态参与生物群系染色。
     public static BlockState getColourState(Mapper mapper, int blockId, BlockState fallback) {
         BlockState material = primaryMaterial(mapper, blockId);
         return material == null ? fallback : material;
     }
 
-    //Client only: bake plan carrying the wrapper ModelData (material under both mods' keys) and the
-    //material state for biome tinting
+    // 烘焙计划同时携带两个模组使用的 ModelData 键和材料状态。
     public static DomumOrnamentumCompat.BakePlan getBakePlan(Mapper mapper, int blockId, BlockState state) {
         MaterialSet materials = materialSetFor(mapper, blockId);
         if (materials == null) {
@@ -303,8 +305,7 @@ public final class CreateCopycatCompat {
         }
     }
 
-    //Client only: the ModelData a copycat wrapper model expects, with the material stuffed under
-    //every key either mod reads
+    // 将材料写入两个模组可能读取的 ModelData 属性；虚拟渲染额外设置 virtual 标记。
     public static ModelData buildModelData(BlockState material) {
         return buildModelData(Map.of("material", material), false);
     }
@@ -331,11 +332,13 @@ public final class CreateCopycatCompat {
 
     public static void closeMapper(Mapper mapper) {
         if (LOADED && mapper != null) {
-            MATERIALS.remove(mapper);
+            MATERIALS_BY_MAPPER.remove(mapper);
         }
     }
 
-    //The unfilled look: block entities carry the copycat base state as their material until filled
+    // ---- 材料提取与持久化 ---------------------------------------------
+
+    // 未填充 Copycat 使用 Create 的基础方块作为临时材料。
     private static volatile BlockState baseSkeleton;
 
     private static BlockState baseMaterialFor(BlockState state) {
@@ -369,7 +372,7 @@ public final class CreateCopycatCompat {
         return new MaterialSet(Map.of("material", base));
     }
 
-    //Restores simple or multi-part materials from captured block entity NBT.
+    // 从方块实体 NBT 恢复单材料或多部件材料。
     public static ModelData materialFromContraptionNbt(BlockState state, CompoundTag beNbt) {
         if (!isCopycatState(state)) {
             return null;
@@ -422,12 +425,12 @@ public final class CreateCopycatCompat {
         if (!LOADED || mapper == null) {
             return null;
         }
-        Map<Integer, MaterialSet> materials = MATERIALS.get(mapper);
+        Map<Integer, MaterialSet> materials = MATERIALS_BY_MAPPER.get(mapper);
         return materials == null ? null : materials.get(blockId);
     }
 
     private static Map<Integer, MaterialSet> materialsFor(Mapper mapper) {
-        return MATERIALS.computeIfAbsent(mapper, m -> new ConcurrentHashMap<>());
+        return MATERIALS_BY_MAPPER.computeIfAbsent(mapper, m -> new ConcurrentHashMap<>());
     }
 
     private static MaterialSet extractMaterials(BlockEntity blockEntity) throws ReflectiveOperationException {
@@ -495,6 +498,8 @@ public final class CreateCopycatCompat {
         }
         return parts.isEmpty() ? null : new MaterialSet(parts);
     }
+
+    // ---- 反射属性缓存 --------------------------------------------------
 
     @SuppressWarnings("unchecked")
     private static void resolveProperties() {

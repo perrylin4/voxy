@@ -285,13 +285,13 @@ public class VoxyRenderSystem {
       float DECREASE_PER_SECOND = 30.0F;
       if (Minecraft.getInstance().getFps() < MIN_FPS) {
          VoxyConfig.CONFIG.subDivisionSize = Math.min(
-            VoxyConfig.CONFIG.subDivisionSize + INCREASE_PER_SECOND / Math.max(1.0F, (float)Minecraft.getInstance().getFps()), 256.0F
+            VoxyConfig.CONFIG.subDivisionSize + INCREASE_PER_SECOND / Math.max(1.0F, (float)Minecraft.getInstance().getFps()), VoxyConfig.MAX_SUBDIVISION_SIZE
          );
       }
 
       if (MAX_FPS < Minecraft.getInstance().getFps() && canDecreaseSize) {
          VoxyConfig.CONFIG.subDivisionSize = Math.max(
-            VoxyConfig.CONFIG.subDivisionSize - DECREASE_PER_SECOND / Math.max(1.0F, (float)Minecraft.getInstance().getFps()), 28.0F
+            VoxyConfig.CONFIG.subDivisionSize - DECREASE_PER_SECOND / Math.max(1.0F, (float)Minecraft.getInstance().getFps()), VoxyConfig.MIN_SUBDIVISION_SIZE
          );
       }
    }

@@ -19,6 +19,7 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 public abstract class VoxyInstance {
+    // 世界引擎由引用和空闲时间共同决定生命周期，锁只保护 activeWorlds 本身。
     private volatile boolean isRunning = true;
     private final Thread worldCleaner;
     public final BooleanSupplier savingServiceRateLimiter;
@@ -38,7 +39,12 @@ public abstract class VoxyInstance {
         this.ingestService = new VoxelIngestService(this.getServiceManager());
         this.importManager = this.createImportManager();
         this.savingServiceRateLimiter = () -> this.savingService.getTaskCount() < 1200;
-        this.worldCleaner = new Thread(() -> {
+        this.worldCleaner = this.createWorldCleaner();
+        this.worldCleaner.start();
+    }
+
+    private Thread createWorldCleaner() {
+        var cleaner = new Thread(() -> {
             try {
                 while (this.isRunning) {
                     Thread.sleep(1000);
@@ -49,10 +55,10 @@ public abstract class VoxyInstance {
                 Logger.error("Exception in world cleaner", e);
             }
         });
-        this.worldCleaner.setPriority(Thread.MIN_PRIORITY);
-        this.worldCleaner.setName("Active world cleaner");
-        this.worldCleaner.setDaemon(true);
-        this.worldCleaner.start();
+        cleaner.setPriority(Thread.MIN_PRIORITY);
+        cleaner.setName("Active world cleaner");
+        cleaner.setDaemon(true);
+        return cleaner;
     }
 
     protected void setNumThreads(int threads) {
@@ -265,6 +271,23 @@ public abstract class VoxyInstance {
     public void shutdown() {
         Logger.info("Shutting down voxy instance");
         this.isRunning = false;
+        this.stopWorldCleaner();
+
+        this.cleanIdle();
+        var worlds = this.snapshotWorlds();
+        this.cancelWorldImports(worlds);
+
+        // Keep the saver alive until final section releases have queued their writes.
+        shutdownService("ingest", this.ingestService::shutdown);
+        this.awaitWorldQuiescence(worlds);
+        shutdownService("saving", this.savingService::shutdown);
+
+        this.freeWorlds();
+        shutdownService("thread pool", this.threadPool::shutdown);
+        Logger.info("Instance shutdown");
+    }
+
+    private void stopWorldCleaner() {
         this.worldCleaner.interrupt();
         try {
             this.worldCleaner.join();
@@ -272,26 +295,15 @@ public abstract class VoxyInstance {
             Thread.currentThread().interrupt();
             Logger.error("Interrupted while stopping the Voxy world cleaner", e);
         }
+    }
 
-        this.cleanIdle();
-        var worlds = this.snapshotWorlds();
+    private void cancelWorldImports(List<WorldEngine> worlds) {
         for (var world : worlds) {
             this.importManager.cancelImport(world);
         }
+    }
 
-        // Keep the saver alive until final section releases have queued their writes.
-        try {
-            this.ingestService.shutdown();
-        } catch (Exception e) {
-            Logger.error(e);
-        }
-        this.awaitWorldQuiescence(worlds);
-        try {
-            this.savingService.shutdown();
-        } catch (Exception e) {
-            Logger.error(e);
-        }
-
+    private void freeWorlds() {
         long stamp = this.activeWorldLock.writeLock();
         try {
             for (var entry : this.activeWorlds.entrySet()) {
@@ -305,13 +317,14 @@ public abstract class VoxyInstance {
         } finally {
             this.activeWorldLock.unlockWrite(stamp);
         }
+    }
 
+    private void shutdownService(String name, Runnable shutdown) {
         try {
-            this.threadPool.shutdown();
+            shutdown.run();
         } catch (Exception e) {
-            Logger.error(e);
+            Logger.error("Failed to shut down " + name + " service", e);
         }
-        Logger.info("Instance shutdown");
     }
 
     public boolean isIngestEnabled(WorldIdentifier worldId) {

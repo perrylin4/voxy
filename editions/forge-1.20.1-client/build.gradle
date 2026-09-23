@@ -15,6 +15,19 @@ repositories {
     maven { url = 'https://maven.minecraftforge.net/' }
     maven { url = 'https://maven.blamejared.com/' }
     maven {
+        name = 'Architectury'
+        url = 'https://maven.architectury.dev/'
+        content { includeGroup 'dev.architectury' }
+    }
+    maven {
+        name = 'Create'
+        url = 'https://maven.createmod.net/'
+        content {
+            includeGroup 'net.createmod.ponder'
+            includeGroup 'dev.engine-room.flywheel'
+        }
+    }
+    maven {
         name = 'Modrinth'
         url = 'https://api.modrinth.com/maven'
         content { includeGroup 'maven.modrinth' }
@@ -23,6 +36,15 @@ repositories {
 
 configurations {
     lwjglRuntimeBundle
+}
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == 'dev.architectury' && requested.name == 'mixin-patched') {
+            useVersion '0.8.5.12'
+            because 'Architectury Loom requests a dynamic version that requires remote metadata'
+        }
+    }
 }
 
 loom {
@@ -83,6 +105,9 @@ dependencies {
     // supplies the Iris-compatible implementation API used by the shader integration sources.
     modImplementation "org.embeddedt:embeddium-${project.minecraft_version}:${project.embeddium_version}"
     modCompileOnly "maven.modrinth:oculus:${project.oculus_compile_version}"
+    modCompileOnly("maven.modrinth:LNytGWDc:8amzvn9x") { transitive = false }
+    modCompileOnly("net.createmod.ponder:Ponder-Forge-1.20.1:1.0.91") { transitive = false }
+    modCompileOnly("dev.engine-room.flywheel:flywheel-forge-1.20.1:1.0.5") { transitive = false }
 
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
     compileOnly 'io.github.llamalad7:mixinextras-common:0.5.4'

@@ -31,10 +31,12 @@ import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.GL45;
 import org.lwjgl.system.MemoryUtil;
 
+/** 26.1.2 NeoForge 的 MDIC 区段渲染器；命令缓冲偏移与 compute shader 固定匹配。 */
 public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, BasicSectionGeometryData> {
    public static final AbstractSectionRenderer.Factory<MDICViewport, BasicSectionGeometryData> FACTORY = AbstractSectionRenderer.Factory.create(
       MDICSectionRenderer.class
    );
+   // 三类间接命令使用连续分区，不能在运行时重新排列。
    public static final int OPAQUE_DRAW_COUNT = 400000;
    public static final int TRANSLUCENT_DRAW_COUNT = 100000;
    public static final int TEMPORAL_DRAW_COUNT = 100000;
@@ -181,6 +183,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
       GL45.glBindTextureUnit(1, 0);
    }
 
+   // ---- 绘制与 GPU 缓冲绑定 ------------------------------------------
+
    public void renderOpaque(MDICViewport viewport) {
       if (this.geometryManager.getSectionCount() != 0) {
          this.uploadUniformBuffer(viewport);
@@ -211,6 +215,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
          GL43.glDisable(3042);
       }
    }
+
+   // ---- Compute 建令与时序同步 ---------------------------------------
 
    public void buildDrawCalls(MDICViewport viewport) {
       if (this.geometryManager.getSectionCount() != 0) {
@@ -322,6 +328,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
    }
 
    @Override
+   // ---- 生命周期 ------------------------------------------------------
+
    public void free() {
       this.uniform.free();
       this.distanceCountBuffer.free();

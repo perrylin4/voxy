@@ -8,9 +8,9 @@ import static me.cortex.voxy.common.world.WorldEngine.*;
 
 public class WorldUpdater {
 
+    /** 将一个底层体素区写入存储，并把必要的变化向上冒泡到所有 LOD 层。 */
     public static void insertUpdate(WorldEngine into, VoxelizedSection section) {
-
-        //Do some very cheeky stuff for MiB
+        // Mine in Abyss 的世界坐标需要先映射到有限的存储范围。
         if (VoxyCommon.IS_MINE_IN_ABYSS) {
             int sector = (section.x+512)>>10;
             section.setPosition(section.x-(sector<<10), section.y+16+(256-32-sector*30), section.z);//Note sector size mult is 30 because the top chunk is replicated (and so is bottom chunk)
@@ -23,10 +23,9 @@ public class WorldUpdater {
             var worldSection = into.acquire(lvl, section.x >> (lvl + 1), section.y >> (lvl + 1), section.z >> (lvl + 1));
 
             int emptinessStateChange = 0;
-            //Propagate the child existence state of the previous iteration to this section
+            // 把子层的存在状态传递给父层；previousSection 在此处仍由上一轮持有。
             if (lvl != 0 && shouldCheckEmptiness) {
                 emptinessStateChange = worldSection.updateEmptyChildState(previousSection);
-                //We kept the previous section acquired, so we need to release it
                 previousSection.release();
                 previousSection = null;
             }
@@ -44,40 +43,23 @@ public class WorldUpdater {
                 }
             }
 
-            if (didStateChange||(emptinessStateChange!=0)) {
-                // which can decide wether to dispatch mesh rebuilds to the surounding sections
-                //Bitmask of neighboring sections
-                //Note, this may be zero (this is more likely to occure at higher lod levels) if it doesnt face any neighbors
-                int neighbors = 0;
-                if (didStateChange) {
-                    neighbors |= ((section.y^(section.y-1))>>(lvl+1))==0?0:1<<0;//Down
-                    neighbors |= ((section.y^(section.y+1))>>(lvl+1))==0?0:1<<1;//Up
-                    neighbors |= ((section.x^(section.x-1))>>(lvl+1))==0?0:1<<2;//-x
-                    neighbors |= ((section.x^(section.x+1))>>(lvl+1))==0?0:1<<3;//+x
-                    neighbors |= ((section.z^(section.z-1))>>(lvl+1))==0?0:1<<4;//-z
-                    neighbors |= ((section.z^(section.z+1))>>(lvl+1))==0?0:1<<5;//+z
-                }
-
+            if (didStateChange || emptinessStateChange != 0) {
+                int neighbors = didStateChange ? neighborMask(section, lvl) : 0;
                 into.markDirty(worldSection, (didStateChange?UPDATE_TYPE_BLOCK_BIT:0)|(emptinessStateChange!=0?UPDATE_TYPE_CHILD_EXISTENCE_BIT:0), neighbors);
             }
 
-            //Need to release the section after using it
-            if (didStateChange||(emptinessStateChange==2)) {
-                if (emptinessStateChange==2) {
-                    //Major state emptiness change, bubble up
+            if (didStateChange || emptinessStateChange == 2) {
+                if (emptinessStateChange == 2) {
+                    // 只有从空到非空（或反向）的变化才需要继续检查父层。
                     shouldCheckEmptiness = true;
-                    //Dont release the section, it will be released on the next loop
                     previousSection = worldSection;
                 } else {
-                    //Propagate up without state change
                     shouldCheckEmptiness = false;
                     previousSection = null;
                     worldSection.release();
                 }
             } else {
-                //Keep walking the remaining mip levels even when nothing changed here: each level compares the
-                //fresh mip against storage, so stale parents get detected and rewritten. Unchanged levels write
-                //identical data and mark nothing dirty.
+                // 父层仍需比较新聚合值，不能因为当前层无变化就提前退出。
                 shouldCheckEmptiness = false;
                 previousSection = null;
                 worldSection.release();
@@ -89,7 +71,19 @@ public class WorldUpdater {
         }
     }
 
+    private static int neighborMask(VoxelizedSection section, int level) {
+        int shift = level + 1;
+        int neighbors = 0;
+        neighbors |= ((section.y ^ (section.y - 1)) >> shift) == 0 ? 0 : 1 << 0;
+        neighbors |= ((section.y ^ (section.y + 1)) >> shift) == 0 ? 0 : 1 << 1;
+        neighbors |= ((section.x ^ (section.x - 1)) >> shift) == 0 ? 0 : 1 << 2;
+        neighbors |= ((section.x ^ (section.x + 1)) >> shift) == 0 ? 0 : 1 << 3;
+        neighbors |= ((section.z ^ (section.z - 1)) >> shift) == 0 ? 0 : 1 << 4;
+        neighbors |= ((section.z ^ (section.z + 1)) >> shift) == 0 ? 0 : 1 << 5;
+        return neighbors;
+    }
 
+    /** 更新单个 LOD 层；返回值低位为数据变化标志，其余位保存非空气数量。 */
     private static long insertSectionLvlIntoWorld(WorldEngine into, VoxelizedSection section, WorldSection worldSection) {
         final long[] vdat = section.section;
         final int lvl = worldSection.lvl;
@@ -106,6 +100,7 @@ public class WorldUpdater {
 
 
 
+        // 均匀块无需物化整段数组，避免无意义的写入和缓存抖动。
         {
             long[] existing = worldSection._rawOrNull();
             if (existing == null) {
@@ -132,7 +127,8 @@ public class WorldUpdater {
             }
         }
 
-        {//Do a bunch of funny math
+        // 按 WorldSection 的 Morton/平面布局写入，保持底层数组顺序不变。
+        {
             var secD = worldSection.materialize();
             int baseSec = bx | (bz << 5) | (by << 10);
             if (lvl == 0) {

@@ -24,18 +24,28 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 
+/** 将 Minecraft 区段快照排队转换为 Voxy 的体素区段。 */
 public class VoxelIngestService {
     private static final ThreadLocal<VoxelizedSection> SECTION_CACHE = ThreadLocal.withInitial(VoxelizedSection::createEmpty);
     private final Service service;
-    private record IngestSection(int cx, int cy, int cz, WorldEngine world, LevelChunk chunk,
-                                 BlockEntity[] domumBlockEntities, LevelChunkSection section,
-                                 DataLayer blockLight, DataLayer skyLight,
-                                 me.cortex.voxy.commonImpl.compat.littletiles.LittleTilesCompat.SectionSnapshot littleTiles){}
+    /** 队列元素持有一个 WorldEngine 引用，任务完成或丢弃时必须释放。 */
+    private record IngestSection(
+            int cx, int cy, int cz,
+            WorldEngine world,
+            LevelChunk chunk,
+            BlockEntity[] domumBlockEntities,
+            LevelChunkSection section,
+            DataLayer blockLight,
+            DataLayer skyLight,
+            me.cortex.voxy.commonImpl.compat.littletiles.LittleTilesCompat.SectionSnapshot littleTiles) {
+    }
     private final ConcurrentLinkedDeque<IngestSection> ingestQueue = new ConcurrentLinkedDeque<>();
 
     public VoxelIngestService(ServiceManager pool) {
         this.service = pool.createServiceNoCleanup(()->this::processJob, 5000, "Ingest service");
     }
+
+    // ---- 后台任务 ------------------------------------------------------
 
     private void processJob() {
         var task = this.ingestQueue.pop();
@@ -86,6 +96,8 @@ public class VoxelIngestService {
         }
     }
 
+    // ---- 光照快照 ------------------------------------------------------
+
     @NotNull
     private static ILightingSupplier getLightingSupplier(IngestSection task) {
         ILightingSupplier supplier = (x,y,z) -> (byte) 0;
@@ -120,6 +132,8 @@ public class VoxelIngestService {
     private static boolean shouldIngestSection(LevelChunkSection section, int cx, int cy, int cz) {
         return true;
     }
+
+    // ---- 区段入队 ------------------------------------------------------
 
     public boolean enqueueIngest(WorldEngine engine, LevelChunk chunk) {
         if (!this.service.isLive()) {
@@ -223,6 +237,7 @@ public class VoxelIngestService {
         return this.service.numJobs();
     }
 
+    /** 停止服务并释放队列中尚未执行任务持有的世界引用。 */
     public void shutdown() {
         this.service.shutdown();
         //Every queued task still holds a world ref - drain and release so worlds can close
@@ -234,7 +249,9 @@ public class VoxelIngestService {
         }
     }
 
-    //Utility method to ingest a chunk into the given WorldIdentifier or world
+    // ---- 公共入口 ------------------------------------------------------
+
+    /** 将已加载区块送入对应世界的摄取队列。 */
     public static boolean tryIngestChunk(WorldIdentifier worldId, LevelChunk chunk) {
         if (worldId == null) return false;
         var instance = VoxyCommon.getInstance();
@@ -245,11 +262,12 @@ public class VoxelIngestService {
         return instance.getIngestService().enqueueIngest(engine, chunk);
     }
 
-    //Try to automatically ingest the chunk into the correct world
+    /** 根据区块所在维度自动选择目标世界。 */
     public static boolean tryAutoIngestChunk(LevelChunk chunk) {
         return tryIngestChunk(WorldIdentifier.of(chunk.getLevel()), chunk);
     }
 
+    /** 供网络/兼容层提交单个区段，调用方不直接接触队列引用计数。 */
     private boolean rawIngest0(WorldEngine engine, LevelChunk chunk, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
         engine.acquireRef();
         BlockEntity[] domumBlockEntities =
@@ -306,6 +324,7 @@ public class VoxelIngestService {
         return engine.instanceIn.getIngestService().rawIngest0(engine, chunk, section, x, y, z, bl, sl);
     }
 
+    /** 非标准调色板需要拷贝，避免异步线程读取主线程正在修改的容器。 */
     private static LevelChunkSection snapshotCustomSection(LevelChunkSection section) {
         if (section == null || section.getStates().getClass() == PalettedContainer.class) {
             return section;

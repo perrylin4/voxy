@@ -31,7 +31,12 @@ layout(location = 3) flat out uint fFace;
 layout(location = 4) out vec4 fColor;
 layout(location = 5) flat out uint fCustomId;
 
-#ifdef PATCHED_SHADER
+#ifdef TRAIN_DEPTH_REPLAY
+layout(location = 8) uniform mat4 uLodTransform;
+layout(location = 6) out vec4 fLodClip;
+#endif
+
+#if defined(PATCHED_SHADER) || defined(TRAIN_DEPTH_REPLAY)
 vec2 distantTaaShift();
 #endif
 
@@ -39,6 +44,11 @@ void main() {
     gl_Position = uTransform * vec4(aPos, 1.0);
     #ifdef PATCHED_SHADER
     gl_Position.xy += distantTaaShift() * gl_Position.w;
+    #endif
+    #ifdef TRAIN_DEPTH_REPLAY
+    // 回写沿用原版投影，LOD 遮挡采样则匹配光影抖动。
+    fLodClip = uLodTransform * vec4(aPos, 1.0);
+    fLodClip.xy += distantTaaShift() * fLodClip.w;
     #endif
     fUv = aUv;
     fColor = aColor;

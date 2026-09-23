@@ -1,18 +1,22 @@
 package me.cortex.voxy.client.compat.copycat;
 
 import me.cortex.voxy.client.compat.LodPipelineHooks;
+import me.cortex.voxy.client.compat.create.DistantFaceCulling;
 import me.cortex.voxy.client.compat.create.DistantLightSampler;
 import me.cortex.voxy.client.compat.create.DistantMesh;
 import me.cortex.voxy.client.compat.create.DistantMeshBuilder;
 import me.cortex.voxy.client.compat.create.DistantShaders;
 import me.cortex.voxy.client.compat.create.DistantVisibility;
 import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.client.core.AbstractRenderPipeline;
+import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.section.SectionStorage;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import me.cortex.voxy.commonImpl.compat.CreateCopycatCompat;
 import me.cortex.voxy.commonImpl.compat.DisguiseStore;
+import me.cortex.voxy.common.world.other.Mapper;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.RenderType;
@@ -34,6 +38,7 @@ import static org.lwjgl.opengl.GL14C.glBlendFuncSeparate;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 
+/** Copycat 专属 LOD 的异步烘焙和远景绘制；普通 LOD 由区段渲染器继续负责。 */
 public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, LodPipelineHooks.TranslucentRenderer {
     private static final int MAX_BAKES_PER_TICK = 1;
     private static volatile CopycatDistantRenderer active;
@@ -47,6 +52,7 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
     private int lastScanX = Integer.MIN_VALUE;
     private int lastScanZ = Integer.MIN_VALUE;
     private int lastMaxChunks = Integer.MIN_VALUE;
+    private int depthSampler;
 
     public CopycatDistantRenderer() {
         active = this;
@@ -57,6 +63,8 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
         CopycatDistantRenderer renderer = active;
         if (renderer != null) renderer.updates.add(new Update(storage, DisguiseStore.keyOf(sx, sy, sz)));
     }
+
+    // ---- 生命周期与异步烘焙 -------------------------------------------
 
     @SubscribeEvent
     public void tick(ClientTickEvent.Post event) {
@@ -123,25 +131,29 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
 
     @SubscribeEvent
     public void logout(ClientPlayerNetworkEvent.LoggingOut event) {
+        if (this.depthSampler != 0) org.lwjgl.opengl.GL33C.glDeleteSamplers(this.depthSampler);
+        this.depthSampler = 0;
         clearMeshes();
         this.updates.clear();
         this.storage = null;
         this.level = null;
     }
 
+    // ---- 绘制与地形深度遮挡 -------------------------------------------
+
     @Override
-    public void render(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline,
+    public void render(AbstractRenderPipeline pipeline,
                        Viewport<?> viewport, int depthFunc) {
         renderMeshes(pipeline, viewport, depthFunc, false);
     }
 
     @Override
-    public void renderTranslucent(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline,
+    public void renderTranslucent(AbstractRenderPipeline pipeline,
                                   Viewport<?> viewport, int depthFunc) {
         renderMeshes(pipeline, viewport, depthFunc, true);
     }
 
-    private void renderMeshes(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline,
+    private void renderMeshes(AbstractRenderPipeline pipeline,
                               Viewport<?> viewport, int depthFunc, boolean translucent) {
         if (this.sections.isEmpty() || !VoxyConfig.CONFIG.isRenderingEnabled()
                 || !VoxyConfig.CONFIG.distantCopycats) return;
@@ -155,6 +167,7 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
         double maxDistance = VoxyConfig.CONFIG.createRenderDistance(VoxyConfig.CONFIG.distantCopycatsMaxChunks);
         double maxDistanceSq = maxDistance * maxDistance;
         boolean bound = false;
+        int previousSampler = org.lwjgl.opengl.GL30C.glGetIntegeri(org.lwjgl.opengl.GL33C.GL_SAMPLER_BINDING, 2);
         var transform = new Matrix4f();
         try {
             for (var item : this.sections.entrySet()) {
@@ -173,9 +186,9 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
                 if (!DistantVisibility.isBoxVisible(viewport, ox - 4, oy - 4, oz - 4,
                         ox + 20, oy + 20, oz + 20)) continue;
                 if (!bound) {
-                    (translucent ? DistantShaders.forTranslucentPipeline(pipeline)
-                            : DistantShaders.forPipeline(pipeline, false)).bind();
+                    DistantShaders.forCopycatPipeline(pipeline, translucent).bind();
                     DistantShaders.bindTextures();
+                    bindTerrainDepth(pipeline, viewport);
                     glEnable(GL_DEPTH_TEST);
                     glDepthFunc(depthFunc);
                     glDepthMask(!translucent);
@@ -202,11 +215,37 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
                 glUseProgram(0);
             }
         } finally {
+            org.lwjgl.opengl.GL33C.glBindSampler(2, previousSampler);
             if (bound) {
                 glStencilFunc(GL_EQUAL, 1, 0x1);
                 glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
             }
         }
+    }
+
+    /** 将原版地形深度绑定到 Copycat shader，修复交接阶段的远景透视。 */
+    private void bindTerrainDepth(AbstractRenderPipeline pipeline, Viewport<?> viewport) {
+        if (this.depthSampler == 0) {
+            this.depthSampler = org.lwjgl.opengl.GL33C.glGenSamplers();
+            org.lwjgl.opengl.GL33C.glSamplerParameteri(this.depthSampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            org.lwjgl.opengl.GL33C.glSamplerParameteri(this.depthSampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            org.lwjgl.opengl.GL33C.glSamplerParameteri(this.depthSampler, GL_TEXTURE_WRAP_S, org.lwjgl.opengl.GL12C.GL_CLAMP_TO_EDGE);
+            org.lwjgl.opengl.GL33C.glSamplerParameteri(this.depthSampler, GL_TEXTURE_WRAP_T, org.lwjgl.opengl.GL12C.GL_CLAMP_TO_EDGE);
+        }
+        org.lwjgl.opengl.GL45C.glBindTextureUnit(2, pipeline.debugSourceDepthTex());
+        org.lwjgl.opengl.GL33C.glBindSampler(2, this.depthSampler);
+        var inverseSource = new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView).invert();
+        var transform = new Matrix4f(viewport.MVP).mul(inverseSource);
+        try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            org.lwjgl.opengl.GL20C.glUniformMatrix4fv(8, false, transform.get(stack.mallocFloat(16)));
+        }
+        boolean halfNdc = RenderProperties.windowIsHalfNdc();
+        org.lwjgl.opengl.GL20C.glUniform4f(12, halfNdc ? 0.5f : 1.0f, halfNdc ? 0.5f : 0.0f,
+                halfNdc ? 2.0f : 1.0f, halfNdc ? -1.0f : 0.0f);
+        org.lwjgl.opengl.GL20C.glUniform4f(13, viewport.width, viewport.height,
+                (float) viewport.width / pipeline.debugSrcWidth(),
+                (float) viewport.height / pipeline.debugSrcHeight());
+        org.lwjgl.opengl.GL20C.glUniform1i(14, pipeline.properties.isReverseZ() ? 1 : 0);
     }
 
     private void drainUpdates(int limit) {
@@ -249,8 +288,9 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
         return values.toIntArray();
     }
 
-    private static Meshes bake(long key, int[] blocks,
-                               me.cortex.voxy.common.world.other.Mapper mapper, ClientLevel level) {
+    // ---- 模型烘焙 ------------------------------------------------------
+
+    private static Meshes bake(long key, int[] blocks, Mapper mapper, ClientLevel level) {
         int sx = BlockPos.getX(key), sy = BlockPos.getY(key), sz = BlockPos.getZ(key);
         var opaque = new DistantMeshBuilder();
         var translucent = new DistantMeshBuilder();
@@ -264,7 +304,7 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
             boolean[] fullBlocks = new boolean[4096];
             for (int i = 0; i < blocks.length; i += 2) {
                 int local = blocks[i];
-                fullBlocks[local] = me.cortex.voxy.client.compat.create.DistantFaceCulling.isFullBlock(
+                fullBlocks[local] = DistantFaceCulling.isFullBlock(
                         mapper.getBlockStateFromBlockId(blocks[i + 1]));
             }
             for (int i = 0; i < blocks.length; i += 2) {
@@ -292,13 +332,13 @@ public final class CopycatDistantRenderer implements LodPipelineHooks.Renderer, 
                     opaque.blockModelLayer(state, model, x, y, z,
                             DistantLightSampler.sky(light), DistantLightSampler.block(light),
                             layer, tint, modelData,
-                            direction -> me.cortex.voxy.client.compat.create.DistantFaceCulling
+                            direction -> DistantFaceCulling
                                     .hidesSectionFace(fullBlocks, local, direction));
                 }
                 translucent.blockModelLayer(state, model, x, y, z,
                         DistantLightSampler.sky(light), DistantLightSampler.block(light),
                         RenderType.translucent(), tint, modelData,
-                        direction -> me.cortex.voxy.client.compat.create.DistantFaceCulling
+                        direction -> DistantFaceCulling
                                 .hidesSectionFace(fullBlocks, local, direction));
             }
             opaqueCpu = opaque.assemble();

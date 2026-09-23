@@ -26,8 +26,9 @@ import java.util.function.IntSupplier;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL33.*;
 
+/** 1.20.1 Forge 的 Iris 扩展补丁解析器。 */
 public class IrisShaderPatch {
-    public static final int VERSION = ((IntSupplier)()->1).getAsInt();
+    public static final int VERSION = ((IntSupplier) () -> 1).getAsInt();
     public static final int SHADER_DEFINE_VERSION = 2;
     private static final ThreadLocal<Set<String>> UNIFORMS_BEING_BUILT = new ThreadLocal<>();
 

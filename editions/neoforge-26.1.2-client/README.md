@@ -47,6 +47,7 @@ Neo-Voxy 为远距离地形提供高性能 LOD 渲染，并针对 NeoForge、Sod
 | 无光影水体、水下雾和熔岩修复 | ✅ | — | 处理透明度、介质雾、液面高度和岸线衔接 |
 | 失明与黑暗效果同步到 LOD | ✅ | — | LOD 使用原版实时限制性雾参数 |
 | 树叶 LOD 质量模式 | ✅ | — | 快速、平衡、质量三档 |
+| 渲染精度滑块 | ✅ | ✅ | 七档细分值：1024、768、512、256、123、64、28 |
 | FakeSight 风格扩展区块请求 | ✅ | — | 移动时限流，静止时逐步扩展至目标距离 |
 | 远距离玩家与乘骑物 | ✅ | — | 可选轻量快照、名称与位置共享 |
 | 专项模组模型兼容 | ✅ | — | 详见下方兼容性表格 |
@@ -58,8 +59,8 @@ Neo-Voxy 为远距离地形提供高性能 LOD 渲染，并针对 NeoForge、Sod
 
 | 模组或组件 | 1.21.1 | 26.1.2 | 兼容说明 |
 |---|---|---|---|
-| Sodium | ✅ 0.8.12 | ✅ 0.9.1 | 26.1.2 仅以 0.9.1 为兼容目标 |
-| Iris | ✅ 1.8.12+ | ✅ 1.11.2+ | 光影包需要自行适配远景渲染语义 |
+| Sodium | ✅ 0.8.12 | ✅ 0.9.2 | 26.1.2 仅以 0.9.2 为兼容目标 |
+| Iris | ✅ 1.8.12+ | ✅ 1.11.4+ | 光影包需要自行适配远景渲染语义 |
 | Create | ✅ 6.0.10 专项 | 基础兼容 | 1.21.1 提供远景列车、轨道、动态结构及动力部件交接 |
 | Sable | ⚠️ 2.0.3 专项 | 无专项实现 | 保留远景载具加载与距离扩展；高风险联合深度重定向默认关闭 |
 | Domum Ornamentum | ✅ 专项 | 无专项实现 | 按方块实体材质数据缓存独立颜色与轻量模型 |
@@ -81,8 +82,8 @@ Neo-Voxy 为远距离地形提供高性能 LOD 渲染，并针对 NeoForge、Sod
 
 | 分支 | Neo-Voxy 版本 | Java | NeoForge |
 |---|---|---:|---|
-| Minecraft 1.21.1 | 0.3.1 | 21 | 21.1.x |
-| Minecraft 26.1.2 | 0.3.3 | 25 | 26.1.2.x |
+| Minecraft 1.21.1 | 0.5.0-alpha.3 | 21 | 21.1.x |
+| Minecraft 26.1.2 | 0.3.4 | 25 | 26.1.2.x |
 
 ### 开发说明
 
@@ -95,7 +96,7 @@ Neo-Voxy 为远距离地形提供高性能 LOD 渲染，并针对 NeoForge、Sod
 ```
 
 26.1.2 分支已将发布包裁剪整合为 Gradle 的 `slimJar` 任务。执行 `build` 会自动生成
-`build/libs/neo-voxy-0.3.3-mc26.1.2-neoforge-client.jar`，不再需要 Python 或 `tools` 目录。该发布包仅保留
+`build/libs/neo-voxy-0.3.4-mc26.1.2-neoforge-client.jar`，不再需要 Python 或 `tools` 目录。该发布包仅保留
 Windows/Linux x86_64 原生库；未带 `-slim` 的大体积 JAR 仅用于构建检查。
 
 1.21.1 的 Create、Sable、EclipticSeasons 等源码联动需要在 `libs/aero-spike` 中提供
@@ -125,6 +126,7 @@ NeoForge, Sodium, Iris, and selected large mods. The two Minecraft branches are 
 | No-shader water, underwater fog, and lava fixes | ✅ | — | Transparency, medium fog, fluid height, and shoreline handling |
 | Blindness and Darkness on LOD | ✅ | — | Reuses vanilla's live restrictive fog parameters |
 | Leaf LOD quality modes | ✅ | — | Fast, Balanced, and Quality modes |
+| Render Precision slider | ✅ | ✅ | Seven subdivision values: 1024, 768, 512, 256, 123, 64, 28 |
 | FakeSight-style extended chunk requests | ✅ | — | Throttled while moving and expanded gradually while stationary |
 | Distant players and ridden vehicles | ✅ | — | Optional lightweight snapshots, names, and position sharing |
 | Dedicated mod model integrations | ✅ | — | See the compatibility table below |
@@ -137,8 +139,8 @@ mod cannot run alongside basic terrain LOD rendering.
 
 | Mod or component | 1.21.1 | 26.1.2 | Compatibility notes |
 |---|---|---|---|
-| Sodium | ✅ 0.8.12 | ✅ 0.9.1 | 26.1.2 targets 0.9.1 only |
-| Iris | ✅ 1.8.12+ | ✅ 1.11.2+ | Shader packs must understand distant-terrain rendering semantics |
+| Sodium | ✅ 0.8.12 | ✅ 0.9.2 | 26.1.2 targets 0.9.2 only |
+| Iris | ✅ 1.8.12+ | ✅ 1.11.4+ | Shader packs must understand distant-terrain rendering semantics |
 | Create | ✅ 6.0.10 integration | Basic only | 1.21.1 adds distant trains, tracks, contraptions, and kinetic handoff |
 | Sable | ⚠️ 2.0.3 integration | No dedicated support | Distant loading/range remains; unsafe combined-depth redirection is off by default |
 | Domum Ornamentum | ✅ Integrated | No dedicated support | Cached block-entity material colours and lightweight independent models |
@@ -160,8 +162,8 @@ not register its listeners, renderers, or recurring work, and the matching setti
 
 | Branch | Neo-Voxy version | Java | NeoForge |
 |---|---|---:|---|
-| Minecraft 1.21.1 | 0.3.1 | 21 | 21.1.x |
-| Minecraft 26.1.2 | 0.3.3 | 25 | 26.1.2.x |
+| Minecraft 1.21.1 | 0.5.0-alpha.3 | 21 | 21.1.x |
+| Minecraft 26.1.2 | 0.3.4 | 25 | 26.1.2.x |
 
 ### Development note
 
@@ -175,7 +177,7 @@ before release. Source comments are intentionally concise.
 ```
 
 The 26.1.2 branch implements release trimming as the Gradle `slimJar` task. `build` automatically
-creates `build/libs/neo-voxy-0.3.3-mc26.1.2-neoforge-client.jar`; Python and the `tools` directory are no longer needed.
+creates `build/libs/neo-voxy-0.3.4-mc26.1.2-neoforge-client.jar`; Python and the `tools` directory are no longer needed.
 The release JAR keeps only Windows/Linux x86_64 natives. The large JAR without `-slim` is retained
 only as an intermediate build artifact.
 

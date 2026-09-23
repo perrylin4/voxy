@@ -1,9 +1,9 @@
 # Neo Voxy — Minecraft 1.20.1 Forge
 
-Neo Voxy 的原生 Minecraft 1.20.1 Forge 移植分支。当前版本为 `0.3.5`，
+Neo Voxy 的原生 Minecraft 1.20.1 Forge 移植分支。当前版本为 `0.3.5-alpha.2`，
 包含核心 LOD 渲染、流体斜坡与通用稳定性修复。
 
-Native Minecraft 1.20.1 Forge port of Neo Voxy. Version 0.3.5 includes core LOD
+Native Minecraft 1.20.1 Forge port of Neo Voxy. Version 0.3.5-alpha.2 includes core LOD
 rendering, fluid slopes, and general stability fixes.
 
 ## 环境要求 / Requirements
@@ -32,12 +32,16 @@ The release JAR only contains native libraries for Windows x64 and Linux x64.
 - 第三方区块调色板的安全回退，避免单个未知调色板中断 LOD 摄取
 - 删除世界前释放 Voxy 渲染器和数据库句柄，减少 Windows 缓存锁残留
 - Java 17 兼容实现与稳定版本显示
+- 七档“渲染精度”滑块（1024、768、512、256、123、64、28）与三档树叶滑块
 - 精简发布构建，移除 RocksDB 中无关平台与 CPU 架构的数据
 
 Create、Sable、Domum Ornamentum、节气等模组联动暂不包含在此测试版本中。
 
 Create, Sable, Domum Ornamentum, seasonal rendering, and other mod integrations
 are intentionally excluded from this alpha.
+
+The settings page includes seven Render Precision levels (1024, 768, 512, 256,
+123, 64, 28) and a three-level leaf rendering slider.
 
 ## 注意 / Notice
 

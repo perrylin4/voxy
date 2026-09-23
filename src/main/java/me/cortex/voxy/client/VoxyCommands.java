@@ -33,6 +33,15 @@ import java.util.concurrent.CompletableFuture;
 public class VoxyCommands {
 
     public static LiteralArgumentBuilder<CommandSourceStack> register() {
+        return Commands.literal("voxy")
+                .then(Commands.literal("reload")
+                        .executes(VoxyCommands::reloadInstance))
+                .then(importCommands())
+                .then(debugCommands());
+    }
+
+    /** 导入命令单独构建，避免调试命令注册和可选 DH 依赖互相干扰。 */
+    private static LiteralArgumentBuilder<CommandSourceStack> importCommands() {
         var imports = Commands.literal("import")
                 .then(Commands.literal("world")
                         .then(Commands.argument("world_name", StringArgumentType.string())
@@ -61,7 +70,10 @@ public class VoxyCommands {
                             .then(Commands.argument("sqlDbPath", StringArgumentType.string())
                                     .executes(VoxyCommands::importDistantHorizons)));
         }
+        return imports;
+    }
 
+    private static LiteralArgumentBuilder<CommandSourceStack> debugCommands() {
         var debug = Commands.literal("debug")
                 .then(Commands.literal("verifyTLNChildMask")
                         .executes(ctx->verifyTLNs(ctx, false))
@@ -102,16 +114,12 @@ public class VoxyCommands {
                         .then(Commands.argument("seconds", IntegerArgumentType.integer(3, 300))
                                 .executes(ctx -> frameCapture(ctx, IntegerArgumentType.getInteger(ctx, "seconds")))));
 
-        return Commands.literal("voxy")//.requires((ctx)-> VoxyCommon.getInstance() != null)
-                .then(Commands.literal("reload")
-                        .executes(VoxyCommands::reloadInstance))
-                .then(imports)
-                .then(debug);
+        return debug;
     }
 
     private static int dumpFog(CommandContext<CommandSourceStack> ctx) {
         var mc = Minecraft.getInstance();
-        var vrs = me.cortex.voxy.client.core.IGetVoxyRenderSystem.getNullable();
+        var vrs = IGetVoxyRenderSystem.getNullable();
         var sb = new StringBuilder("voxy fog state:").append(System.lineSeparator());
         if (vrs == null) {
             sb.append("  render system: NULL (voxy not rendering)");
@@ -330,7 +338,7 @@ public class VoxyCommands {
             sb.append("\ndepthProbe: ").append(me.cortex.voxy.client.compat.LodPipelineHooks.depthProbeResult);
         }
         sb.append("\nshaders=").append(me.cortex.voxy.client.core.util.IrisUtil.irisShaderPackEnabled());
-        var voxyRenderer = me.cortex.voxy.client.core.IGetVoxyRenderSystem.getNullable();
+        var voxyRenderer = IGetVoxyRenderSystem.getNullable();
         if (voxyRenderer != null) {
             sb.append(" sableDepthTex=").append(voxyRenderer.getSableOcclusionDepthTexture())
                     .append(" (0 means the LOD depth already lands in the vanilla depth buffer)");

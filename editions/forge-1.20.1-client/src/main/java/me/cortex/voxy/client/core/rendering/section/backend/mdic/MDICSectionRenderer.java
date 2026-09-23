@@ -42,15 +42,16 @@ import static org.lwjgl.opengl.GL43.*;
 import static org.lwjgl.opengl.GL45.glBindTextureUnit;
 import static org.lwjgl.opengl.NVRepresentativeFragmentTest.GL_REPRESENTATIVE_FRAGMENT_TEST_NV;
 
-//Uses MDIC to render the sections
+/** 1.20.1 Forge 的 MDIC 区段渲染器；间接命令分区必须与 compute shader 对齐。 */
 public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, BasicSectionGeometryData> {
     public static final Factory<MDICViewport, BasicSectionGeometryData> FACTORY = AbstractSectionRenderer.Factory.create(MDICSectionRenderer.class);
 
-    public static final int OPAQUE_DRAW_COUNT = 400_000;//in draw calls
-    public static final int TRANSLUCENT_DRAW_COUNT = 100_000;//in draw calls
-    public static final int TEMPORAL_DRAW_COUNT = 100_000;//in draw calls
-    private static final int TRANSLUCENT_OFFSET = OPAQUE_DRAW_COUNT;//in draw calls
-    private static final int TEMPORAL_OFFSET = TRANSLUCENT_OFFSET+TRANSLUCENT_DRAW_COUNT;//in draw calls
+    // 三类间接命令的容量和偏移由 GPU 生成器共同约定。
+    public static final int OPAQUE_DRAW_COUNT = 400_000;
+    public static final int TRANSLUCENT_DRAW_COUNT = 100_000;
+    public static final int TEMPORAL_DRAW_COUNT = 100_000;
+    private static final int TRANSLUCENT_OFFSET = OPAQUE_DRAW_COUNT;
+    private static final int TEMPORAL_OFFSET = TRANSLUCENT_OFFSET + TRANSLUCENT_DRAW_COUNT;
     private static final int STATISTICS_BUFFER_BINDING = 8;
     private final Shader terrainShader;
     private final Shader translucentTerrainShader;
@@ -87,12 +88,10 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
             .compile();
 
-    private final GlBuffer uniform = new GlBuffer(1024).zero();//TODO move to viewport?
+    private final GlBuffer uniform = new GlBuffer(1024).zero();
+    private final GlBuffer distanceCountBuffer = new GlBuffer(1024 * 4 + TRANSLUCENT_DRAW_COUNT * 4).zero();
 
-    //TODO: needs to be in the viewport, since it contains the compute indirect call/values
-    private final GlBuffer distanceCountBuffer = new GlBuffer(1024*4+TRANSLUCENT_DRAW_COUNT*4).zero();//TODO move to viewport?
-
-    //Statistics
+    // 调试统计只在开关开启时读取，但缓冲大小固定以保持 shader ABI。
     private final GlBuffer statisticsBuffer = new GlBuffer(1024).zero();
 
     private final AbstractRenderPipeline pipeline;
@@ -180,6 +179,13 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         MemoryUtil.memPutFloat(ptr, 0.0f); ptr += 4;
         MemoryUtil.memPutFloat(ptr, 0.0f); ptr += 4;
 
+        var config = me.cortex.voxy.client.config.VoxyConfig.CONFIG;
+        float near = Math.max(16, Minecraft.getInstance().options.getEffectiveRenderDistance() * 16);
+        float far = config.distantTrackMaxChunks == 0 ? config.getLodRenderDistanceBlocks() : config.distantTrackMaxChunks * 16;
+        MemoryUtil.memPutFloat(ptr, me.cortex.voxy.client.compat.distant.TrackLodReplacement.enabled() ? 1 : 0); ptr += 4;
+        MemoryUtil.memPutFloat(ptr, near * near); ptr += 4;
+        MemoryUtil.memPutFloat(ptr, far * far); ptr += 4;
+        MemoryUtil.memPutFloat(ptr, 0); ptr += 4;
         UploadStream.INSTANCE.commit();
     }
 
@@ -187,7 +193,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     private void bindRenderingBuffers(MDICViewport viewport) {
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, this.uniform.id);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, this.geometryManager.getGeometryBuffer().id);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, this.geometryManager.getMetadataBuffer().id);
+        me.cortex.voxy.client.compat.distant.TrackLodReplacement.bind();
         this.modelStore.bind(3, 4, 0);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, viewport.positionScratchBuffer.id);
         LightMapHelper.bind(1);
@@ -233,6 +239,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     }
 
     @Override
+    // ---- 绘制与 GPU 缓冲绑定 ------------------------------------------
+
     public void renderOpaque(MDICViewport viewport) {
         if (this.geometryManager.getSectionCount() == 0) return;
 
@@ -271,6 +279,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     }
 
     @Override
+    // ---- Compute 建令与时序同步 ---------------------------------------
+
     public void buildDrawCalls(MDICViewport viewport) {
         if (this.geometryManager.getSectionCount() == 0) return;
         this.uploadUniformBuffer(viewport);
@@ -397,6 +407,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     }
 
     @Override
+    // ---- 生命周期 ------------------------------------------------------
+
     public void free() {
         this.uniform.free();
         this.distanceCountBuffer.free();

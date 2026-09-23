@@ -1,15 +1,17 @@
 package me.cortex.voxy.client.core.model.bakery;
 
-import me.cortex.voxy.client.config.VoxyConfig;
-
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.client.core.compat.eclipticseasons.SeasonalLod;
 import me.cortex.voxy.client.core.model.ModelFactory;
 import me.cortex.voxy.common.util.UnsafeUtil;
 import me.cortex.voxy.common.world.other.Mapper;
 import me.cortex.voxy.common.world.other.SeasonalIdSpace;
+import me.cortex.voxy.commonImpl.compat.CreateCopycatCompat;
 import me.cortex.voxy.commonImpl.compat.DomumOrnamentumCompat;
+import me.cortex.voxy.commonImpl.compat.FramedBlocksCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.ItemBlockRenderTypes;
 import net.minecraft.client.renderer.RenderType;
@@ -45,6 +47,7 @@ import static org.lwjgl.opengl.GL15C.glBindBuffer;
 import static org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER;
 import static org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER_BINDING;
 
+/** 在 CPU 光栅器中生成六面 LOD 纹理，并保留模型层和兼容模组的材质信息。 */
 public class SoftwareModelTextureBakery {
     private static final Matrix4f[] VIEWS = new Matrix4f[6];
 
@@ -67,7 +70,7 @@ public class SoftwareModelTextureBakery {
 
             RenderSystem.recordRenderCall(() -> {
                 try {
-                    _doSetupTexture(textureId);
+                    doSetupTexture(textureId);
                     future.complete(null);
                 } catch (Exception e) {
                     future.completeExceptionally(e);
@@ -76,11 +79,12 @@ public class SoftwareModelTextureBakery {
 
             future.join();
         } else {
-            _doSetupTexture(textureId);
+            doSetupTexture(textureId);
         }
     }
 
-    private void _doSetupTexture(int glId) {
+    /** 读取方块图集时保存并恢复像素传输状态，避免污染后续 Minecraft 上传。 */
+    private void doSetupTexture(int glId) {
         int previousTexture = glGetInteger(GL_TEXTURE_BINDING_2D);
         int previousPackBuffer = glGetInteger(GL_PIXEL_PACK_BUFFER_BINDING);
         int previousRowLength = glGetInteger(GL_PACK_ROW_LENGTH);
@@ -144,13 +148,13 @@ public class SoftwareModelTextureBakery {
             return false;
         }
         if (!domumModel) {
-            plan = me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.getBakePlan(this.mapper, blockId, state);
+            plan = CreateCopycatCompat.getBakePlan(this.mapper, blockId, state);
             if (!plan.isEmpty() && plan.detailedMesh()) {
                 return false;
             }
         }
         if (plan.isEmpty()) {
-            plan = me.cortex.voxy.commonImpl.compat.FramedBlocksCompat.getBakePlan(this.mapper, blockId, state);
+            plan = FramedBlocksCompat.getBakePlan(this.mapper, blockId, state);
         }
         this.conservativeCulling |= !plan.isEmpty();
         BlockState modelState = plan.modelState() == null ? state : plan.modelState();
@@ -165,7 +169,7 @@ public class SoftwareModelTextureBakery {
         this.translucentVC.setFallbackTintColour(plan.fallbackTintAbgr()).setForcedTintColour(forcedTint);
 
         BakedModel[] bakeModels = { model };
-        var seasonalView = me.cortex.voxy.client.core.compat.eclipticseasons.SeasonalLod.view;
+        var seasonalView = SeasonalLod.view;
         if (this.seasonalModelId != null && seasonalView != null) {
             var seasonal = seasonalView.resolveSeasonalModel(modelState, this.seasonalModelId);
             if (seasonal != null) {
@@ -197,8 +201,8 @@ public class SoftwareModelTextureBakery {
             }
 
             var random = new SingleThreadedRandomSource(42L);
-            boolean copycatState = me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.isCopycatState(state);
-            boolean copycatsPlusModel = me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.isCopycatsPlusModel(bakeModel);
+            boolean copycatState = CreateCopycatCompat.isCopycatState(state);
+            boolean copycatsPlusModel = CreateCopycatCompat.isCopycatsPlusModel(bakeModel);
             for (RenderType renderLayer : layers) {
                 RenderType quadQueryLayer = copycatState && !copycatsPlusModel
                         ? null : resolveQueryLayer(bakeModel, modelState, modelData, renderLayer);
@@ -248,7 +252,7 @@ public class SoftwareModelTextureBakery {
     public void beginRenderOnlyBake(int blockId) {
         this.renderSnowOverlay = false;
         this.seasonalModelId = null;
-        if (me.cortex.voxy.client.core.compat.eclipticseasons.SeasonalLod.view == null
+        if (SeasonalLod.view == null
                 || blockId < this.mapper.getBlockStateCount()
                 || blockId == SeasonalIdSpace.VIRTUAL_ICE_ID) {
             return;
@@ -468,7 +472,7 @@ public class SoftwareModelTextureBakery {
         if (isBlock) {
             //Copycat wrapper models only emit quads when queried with their MATERIAL's chunk render
             //type, not the copycat block's own layer
-            var copycatLayer = me.cortex.voxy.commonImpl.compat.CreateCopycatCompat.renderLayerOverride(this.mapper, blockId, state);
+            var copycatLayer = CreateCopycatCompat.renderLayerOverride(this.mapper, blockId, state);
             if (copycatLayer != null) {
                 blockRenderLayer = copycatLayer;
             }

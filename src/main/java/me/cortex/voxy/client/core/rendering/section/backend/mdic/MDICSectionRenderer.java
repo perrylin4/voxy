@@ -3,6 +3,8 @@ package me.cortex.voxy.client.core.rendering.section.backend.mdic;
 
 import me.cortex.voxy.client.RenderStatistics;
 import me.cortex.voxy.client.VoxyClient;
+import me.cortex.voxy.client.compat.LodPipelineHooks;
+import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.AbstractRenderPipeline;
 import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.gl.GlBuffer;
@@ -15,6 +17,7 @@ import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRende
 import me.cortex.voxy.client.core.rendering.section.geometry.BasicSectionGeometryData;
 import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.rendering.util.LightMapHelper;
+import me.cortex.voxy.client.core.rendering.LodBoundaryFade;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
@@ -42,21 +45,22 @@ import static org.lwjgl.opengl.GL43.*;
 import static org.lwjgl.opengl.GL45.glBindTextureUnit;
 import static org.lwjgl.opengl.NVRepresentativeFragmentTest.GL_REPRESENTATIVE_FRAGMENT_TEST_NV;
 
-//Uses MDIC to render the sections
+/** 使用 Multi-Draw Indirect Count 绘制 LOD 区块。 */
 public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, BasicSectionGeometryData> {
     public static final Factory<MDICViewport, BasicSectionGeometryData> FACTORY = AbstractSectionRenderer.Factory.create(MDICSectionRenderer.class);
 
-    public static final int OPAQUE_DRAW_COUNT = 400_000;//in draw calls
-    public static final int TRANSLUCENT_DRAW_COUNT = 100_000;//in draw calls
-    public static final int TEMPORAL_DRAW_COUNT = 100_000;//in draw calls
-    private static final int TRANSLUCENT_OFFSET = OPAQUE_DRAW_COUNT;//in draw calls
-    private static final int TEMPORAL_OFFSET = TRANSLUCENT_OFFSET+TRANSLUCENT_DRAW_COUNT;//in draw calls
+    // 三段间接绘制命令在同一缓冲中分区，偏移量必须与 compute shader 保持一致。
+    public static final int OPAQUE_DRAW_COUNT = 400_000;
+    public static final int TRANSLUCENT_DRAW_COUNT = 100_000;
+    public static final int TEMPORAL_DRAW_COUNT = 100_000;
+    private static final int TRANSLUCENT_OFFSET = OPAQUE_DRAW_COUNT;
+    private static final int TEMPORAL_OFFSET = TRANSLUCENT_OFFSET + TRANSLUCENT_DRAW_COUNT;
     private static final int STATISTICS_BUFFER_BINDING = 8;
     private final Shader terrainShader;
     private final Shader translucentTerrainShader;
 
-    private final boolean opaqueNearFirst = me.cortex.voxy.client.config.VoxyConfig.CONFIG.experimentalOpaqueNearFirst;
-    private final boolean chunkMaskHalfRes = me.cortex.voxy.client.config.VoxyConfig.CONFIG.experimentalChunkMaskHalfRes;
+    private final boolean opaqueNearFirst = VoxyConfig.CONFIG.experimentalOpaqueNearFirst;
+    private final boolean chunkMaskHalfRes = VoxyConfig.CONFIG.experimentalChunkMaskHalfRes;
     private final Shader commandGenShader = Shader.make()
             .define("TRANSLUCENT_WRITE_BASE", 1024)
             .defineIf("OPAQUE_NEAR_FIRST", this.opaqueNearFirst)
@@ -84,7 +88,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     private final Shader translucentGenShader = Shader.make()
             .add(ShaderType.COMPUTE, "voxy:lod/gl46/buildtranslucents.comp")
             .define("TRANSLUCENT_WRITE_BASE", 1024)
-            .defineIf("OPAQUE_NEAR_FIRST", this.opaqueNearFirst)//The size of the prefix sum array
+            .defineIf("OPAQUE_NEAR_FIRST", this.opaqueNearFirst)
             .define("TRANSLUCENT_DISTANCE_BUFFER_BINDING", 5)
             .define("TRANSLUCENT_OFFSET", TRANSLUCENT_OFFSET)
 
@@ -94,54 +98,53 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     private final GlBuffer distanceCountBuffer = new GlBuffer(1024*4+TRANSLUCENT_DRAW_COUNT*4).zero();
 
-    //Statistics
+    // 调试统计缓冲只在统计开关打开时读取，仍预留固定大小以保持 shader ABI。
     private final GlBuffer statisticsBuffer = new GlBuffer(1024).zero();
 
     private final AbstractRenderPipeline pipeline;
     private final float fluidDatumY;
     private final Matrix4f uniformMatrix = new Matrix4f();
+
     public MDICSectionRenderer(AbstractRenderPipeline pipeline, ModelStore modelStore, BasicSectionGeometryData geometryData) {
         super(pipeline.properties, modelStore, geometryData);
         this.pipeline = pipeline;
         var level = Minecraft.getInstance().level;
         this.fluidDatumY = level == null ? -1.0e9f : level.getSeaLevel() - (7.0f / 64.0f);
-        //The pipeline can be used to transform the renderer in abstract ways
 
+        // 管线可以在 shader 构建阶段注入 TAA、雾效和光影兼容代码。
         String vertex = ShaderLoader.parse("voxy:lod/gl46/quads3.vert");
         String taa = pipeline.taaFunction("taaShift");
         if (taa != null) {
-            vertex += "\n"+taa;//inject it at the end
+            vertex += "\n" + taa;
         }
         var builder = Shader.make()
                 .apply(this.properties::apply)
                 .defineIf("TAA_PATCH", taa != null)
                 .defineIf("DEBUG_RENDER", false)
                 .defineIf("CHUNK_MASK_HALF_RES", this.chunkMaskHalfRes)
-
-
-                //.defineIf("USE_NV_BARRY", Capabilities.INSTANCE.nvBarryCoords)
-
                 .addSource(ShaderType.VERTEX, vertex);
 
-        //Apply per face tinting
+        // 方向光照在顶点阶段处理，保持模型颜色和 LOD 光照采样一致。
         addDirectionalFaceTint(builder, Minecraft.getInstance().level);
 
         String frag = ShaderLoader.parse("voxy:lod/gl46/quads.frag");
 
         String opaqueFrag = pipeline.patchOpaqueShader(this, frag);
-        opaqueFrag = opaqueFrag==null?frag:opaqueFrag;
+        opaqueFrag = opaqueFrag == null ? frag : opaqueFrag;
 
         this.terrainShader = tryCompilePatchedOrNormal(builder, opaqueFrag, frag);
 
         String translucentFrag = pipeline.patchTranslucentShader(this, frag);
-        translucentFrag = translucentFrag==null?frag:translucentFrag;
+        translucentFrag = translucentFrag == null ? frag : translucentFrag;
 
         this.translucentTerrainShader = tryCompilePatchedOrNormal(builder.define("TRANSLUCENT"), translucentFrag, frag);
 
         if (this.pipeline.hasTAA()) {
             this.cullShader = Shader.make()
                     .apply(this.properties::apply)
-                    .addSource(ShaderType.VERTEX, ShaderLoader.parse("voxy:lod/gl46/cull/raster.vert")+"\n\n\n\n"+pipeline.taaFunction("getTAA"))
+                    .addSource(ShaderType.VERTEX,
+                            ShaderLoader.parse("voxy:lod/gl46/cull/raster.vert")
+                                    + "\n\n\n\n" + pipeline.taaFunction("getTAA"))
                     .define("TAA")
                     .add(ShaderType.FRAGMENT, "voxy:lod/gl46/cull/raster.frag")
                     .compile();
@@ -156,44 +159,66 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     private void uploadUniformBuffer(MDICViewport viewport) {
         long ptr = UploadStream.INSTANCE.upload(this.uniform, 0, 1024);
-        
+
         var mat = this.uniformMatrix.set(viewport.MVP);
         mat.translate(-viewport.innerTranslation.x, -viewport.innerTranslation.y, -viewport.innerTranslation.z);
-        mat.getToAddress(ptr); ptr += 4*4*4;
+        mat.getToAddress(ptr);
+        ptr += 4 * 4 * 4;
 
-        viewport.section.getToAddress(ptr); ptr += 4*3;
+        viewport.section.getToAddress(ptr);
+        ptr += 4 * 3;
 
-        if (viewport.frameId<0) {
+        if (viewport.frameId < 0) {
             Logger.error("Frame ID negative, this will cause things to break, wrapping around");
             viewport.frameId &= 0x7fffffff;
         }
-        MemoryUtil.memPutInt(ptr, viewport.frameId&0x7fffffff); ptr += 4;
-        viewport.innerTranslation.getToAddress(ptr); ptr += 4*3;
-        MemoryUtil.memPutFloat(ptr, this.fluidDatumY); ptr += 4;
-        var boundary = me.cortex.voxy.client.core.rendering.LodBoundaryFade.getDistances();
-        MemoryUtil.memPutFloat(ptr, boundary.enabled() ? 1.0f : 0.0f); ptr += 4;
-        MemoryUtil.memPutFloat(ptr, boundary.fadeStart()); ptr += 4;
-        MemoryUtil.memPutFloat(ptr, boundary.fadeEnd()); ptr += 4;
-        var config = me.cortex.voxy.client.config.VoxyConfig.CONFIG;
+        MemoryUtil.memPutInt(ptr, viewport.frameId & 0x7fffffff);
+        ptr += 4;
+        viewport.innerTranslation.getToAddress(ptr);
+        ptr += 4 * 3;
+        MemoryUtil.memPutFloat(ptr, this.fluidDatumY);
+        ptr += 4;
+
+        // 以下字段由 quads shader 读取，顺序和 1024 字节 uniform ABI 保持不变。
+        var boundary = LodBoundaryFade.getDistances();
+        MemoryUtil.memPutFloat(ptr, boundary.enabled() ? 1.0f : 0.0f);
+        ptr += 4;
+        MemoryUtil.memPutFloat(ptr, boundary.fadeStart());
+        ptr += 4;
+        MemoryUtil.memPutFloat(ptr, boundary.fadeEnd());
+        ptr += 4;
+
+        var config = VoxyConfig.CONFIG;
         double framedDistance = config.distantFramedBlocks
                 ? config.createRenderDistance(config.distantFramedBlocksMaxChunks) : 0.0;
-        MemoryUtil.memPutFloat(ptr, (float) Math.min(framedDistance * framedDistance, Float.MAX_VALUE)); ptr += 4;
-        int curveRatio = me.cortex.voxy.client.config.VoxyConfig.CONFIG.earthCurveRatio;
-        MemoryUtil.memPutFloat(ptr, curveRatio >= 50 ? 6371000.0f / curveRatio : 0.0f); ptr += 4;
-        MemoryUtil.memPutFloat(ptr, Math.max(net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0f - 16.0f, 16.0f)); ptr += 4;
+        MemoryUtil.memPutFloat(ptr, (float) Math.min(framedDistance * framedDistance, Float.MAX_VALUE));
+        ptr += 4;
+
+        int curveRatio = VoxyConfig.CONFIG.earthCurveRatio;
+        MemoryUtil.memPutFloat(ptr, curveRatio >= 50 ? 6371000.0f / curveRatio : 0.0f);
+        ptr += 4;
+        MemoryUtil.memPutFloat(ptr, Math.max(
+                Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0f - 16.0f,
+                16.0f));
+        ptr += 4;
+
         boolean distantTracksReady = config.distantTracks
-                && me.cortex.voxy.client.compat.LodPipelineHooks.distantTrackMeshesReady;
-        MemoryUtil.memPutFloat(ptr, distantTracksReady ? 1.0f : 0.0f); ptr += 4;
-        MemoryUtil.memPutFloat(ptr, 0.0f); ptr += 4;
-        MemoryUtil.memPutInt(ptr, viewport.prevBuildFrameId & 0x7fffffff); ptr += 4;
-        MemoryUtil.memPutInt(ptr, me.cortex.voxy.client.config.VoxyConfig.CONFIG.experimentalCmdListHold
-                ? viewport.prevBuildFrameId & 0x7fffffff : 0); ptr += 4;
+                && LodPipelineHooks.distantTrackMeshesReady;
+        MemoryUtil.memPutFloat(ptr, distantTracksReady ? 1.0f : 0.0f);
+        ptr += 4;
+        MemoryUtil.memPutFloat(ptr, 0.0f);
+        ptr += 4;
+        MemoryUtil.memPutInt(ptr, viewport.prevBuildFrameId & 0x7fffffff);
+        ptr += 4;
+        MemoryUtil.memPutInt(ptr, VoxyConfig.CONFIG.experimentalCmdListHold
+                ? viewport.prevBuildFrameId & 0x7fffffff : 0);
 
         UploadStream.INSTANCE.commit();
     }
 
 
     private void bindRenderingBuffers(MDICViewport viewport) {
+        // 绑定布局必须和 lod/gl46/bindings.glsl、各 compute shader 的 binding 对齐。
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, this.uniform.id);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, this.geometryManager.getGeometryBuffer().id);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, this.geometryManager.getMetadataBuffer().id);
@@ -208,25 +233,23 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     }
 
     private void renderTerrain(MDICViewport viewport, long indirectOffset, long drawCountOffset, int maxDrawCount) {
-
-
         glDisable(GL_CULL_FACE);
         glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(this.properties.closerEqualDepthCompare());
         this.terrainShader.bind();
-        glBindVertexArray(GlVertexArray.STATIC_VAO);//Needs to be before binding
+        glBindVertexArray(GlVertexArray.STATIC_VAO);
         this.pipeline.setupAndBindOpaque(viewport);
         this.bindRenderingBuffers(viewport);
 
-        glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);//Barrier everything is needed
+        glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
         glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
 
-        if (VoxyClient.getOcclusionDebugState()==3) {
+        if (VoxyClient.getOcclusionDebugState() == 3) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         }
         glMultiDrawElementsIndirectCountARB(GL_TRIANGLES, GL_UNSIGNED_SHORT, indirectOffset, drawCountOffset, maxDrawCount, 0);
-        if (VoxyClient.getOcclusionDebugState()==3) {
+        if (VoxyClient.getOcclusionDebugState() == 3) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         }
 
@@ -241,16 +264,21 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     @Override
     public void renderOpaque(MDICViewport viewport) {
-        if (this.geometryManager.getSectionCount() == 0) return;
+        if (this.geometryManager.getSectionCount() == 0) {
+            return;
+        }
 
         this.uploadUniformBuffer(viewport);
 
-        this.renderTerrain(viewport, 0, 4*3, Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), OPAQUE_DRAW_COUNT));
+        int drawCount = Math.min((int) (this.geometryManager.getSectionCount() * 4.4 + 128), OPAQUE_DRAW_COUNT);
+        this.renderTerrain(viewport, 0, 4 * 3, drawCount);
     }
 
     @Override
     public void renderTranslucent(MDICViewport viewport) {
-        if (this.geometryManager.getSectionCount() == 0) return;
+        if (this.geometryManager.getSectionCount() == 0) {
+            return;
+        }
 
         glEnable(GL_BLEND);
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -259,13 +287,19 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(this.properties.closerEqualDepthCompare());
         this.translucentTerrainShader.bind();
-        glBindVertexArray(GlVertexArray.STATIC_VAO);//Needs to be before binding
+        glBindVertexArray(GlVertexArray.STATIC_VAO);
         this.pipeline.setupAndBindTranslucent(viewport);
         this.bindRenderingBuffers(viewport);
 
-        glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);//Barrier everything is needed
+        glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
         glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
-        glMultiDrawElementsIndirectCountARB(GL_TRIANGLES, GL_UNSIGNED_SHORT, TRANSLUCENT_OFFSET*5*4, 4*4, Math.min(this.geometryManager.getSectionCount(), TRANSLUCENT_DRAW_COUNT), 0);
+        glMultiDrawElementsIndirectCountARB(
+                GL_TRIANGLES,
+                GL_UNSIGNED_SHORT,
+                TRANSLUCENT_OFFSET * 5 * 4,
+                4 * 4,
+                Math.min(this.geometryManager.getSectionCount(), TRANSLUCENT_DRAW_COUNT),
+                0);
 
         glEnable(GL_CULL_FACE);
         glBindVertexArray(0);
@@ -279,24 +313,28 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     @Override
     public void buildDrawCalls(MDICViewport viewport) {
-        if (this.geometryManager.getSectionCount() == 0) return;
+        if (this.geometryManager.getSectionCount() == 0) {
+            return;
+        }
         this.uploadUniformBuffer(viewport);
-        //Can do a sneeky trick, since the sectionRenderList is a list to things to render, it invokes the culler
-        // which only marks visible sections
+
+        // renderList 只标记可见区块；先清理计数，再执行遮挡测试和命令生成。
 
 
-        {//Dispatch prep
+        // 准备间接绘制计数和当前帧的渲染列表。
+        {
             this.prepShader.bind();
             glBindBufferBase(GL_UNIFORM_BUFFER, 0, this.uniform.id);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, viewport.drawCountCallBuffer.id);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, viewport.getRenderList().id);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-            glDispatchCompute(1,1,1);
+            glDispatchCompute(1, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         }
 
         GPUTiming.INSTANCE.marker("OT");
-        {//Test occlusion
+        // 使用上一阶段深度测试可见性，并把结果写入 visibilityBuffer。
+        {
             this.cullShader.bind();
             if (this.pipeline.hasTAA()) this.pipeline.bindUniforms();//Used for shader TAA
             if (Capabilities.INSTANCE.repFragTest) {
@@ -313,7 +351,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             glDepthFunc(this.properties.closerEqualDepthCompare());
             glColorMask(false, false, false, false);
             glDepthMask(false);
-            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT|GL_COMMAND_BARRIER_BIT);
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
             glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_BYTE, 6*4);
             glDepthMask(true);
             glColorMask(true, true, true, true);
@@ -325,8 +363,9 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
         GPUTiming.INSTANCE.marker("CG");
 
-        {//Generate the commands
-            this.distanceCountBuffer.zeroRange(0, 1024*4);
+        // 根据可见性生成不透明、时间性和半透明绘制命令。
+        {
+            this.distanceCountBuffer.zeroRange(0, 1024 * 4);
             this.commandGenShader.bind();
             glBindBufferBase(GL_UNIFORM_BUFFER, 0, this.uniform.id);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, viewport.drawCallBuffer.id);
@@ -345,7 +384,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, viewport.drawCountCallBuffer.id);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
             glDispatchComputeIndirect(0);
-            glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);
+            glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
 
             if (RenderStatistics.enabled) {
                 DownloadStream.INSTANCE.download(this.statisticsBuffer, down->{
@@ -362,11 +401,12 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         }
 
         GPUTiming.INSTANCE.marker("TS");
-        {//Do translucency sorting
+        // 对半透明区块按距离排序，再生成第二段间接绘制命令。
+        {
             this.prefixSumShader.bind();
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, this.distanceCountBuffer.id);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);//Am unsure if is needed
-            glDispatchCompute(1,1,1);
+            glDispatchCompute(1, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
             this.translucentGenShader.bind();
@@ -377,8 +417,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, viewport.indirectLookupBuffer.id);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, this.distanceCountBuffer.id);
 
-            glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, viewport.drawCountCallBuffer.id);//This isnt great but its a nice trick to bound it, even if its inefficent ;-;
-            glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT|GL_UNIFORM_BARRIER_BIT);
+            glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, viewport.drawCountCallBuffer.id);
+            glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_UNIFORM_BARRIER_BIT);
             glDispatchComputeIndirect(0);
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);
         }
@@ -387,9 +427,15 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     @Override
     public void renderTemporal(MDICViewport viewport) {
-        if (this.geometryManager.getSectionCount() == 0) return;
-        //Render temporal
-        this.renderTerrain(viewport, TEMPORAL_OFFSET*5*4, 4*5, Math.min(this.geometryManager.getSectionCount(), TEMPORAL_DRAW_COUNT));
+        if (this.geometryManager.getSectionCount() == 0) {
+            return;
+        }
+        // 时间性命令在同一地形 shader 中复用，避免额外的状态切换。
+        this.renderTerrain(
+                viewport,
+                TEMPORAL_OFFSET * 5 * 4,
+                4 * 5,
+                Math.min(this.geometryManager.getSectionCount(), TEMPORAL_DRAW_COUNT));
     }
 
     @Override
@@ -405,6 +451,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     @Override
     public void free() {
+        // 释放顺序与 shader/缓冲的创建顺序相反，确保 GPU 句柄不会泄漏到下一个世界。
         this.uniform.free();
         this.distanceCountBuffer.free();
         this.translucentTerrainShader.free();

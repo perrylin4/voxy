@@ -17,9 +17,9 @@ Neo Voxy 由 **JohnSnow** 维护，基于 [NHblock714/voxy](https://github.com/N
 
 | 版本 | 安装位置 | 渲染前置 | Java | 发布文件 |
 |---|---|---|---:|---|
-| Minecraft 1.21.1 · NeoForge | 客户端必装，服务端可选 | Sodium 0.8.x / Iris 1.8.12+ | 21 | `neo-voxy-0.5.2-mc1.21.1-neoforge.jar` |
-| Minecraft 1.20.1 · Forge | 仅客户端 | Embeddium / Oculus | 17 | `neo-voxy-0.3.5-mc1.20.1-forge-client.jar` |
-| Minecraft 26.1.2 · NeoForge | 仅客户端 | Sodium 0.9.1 / Iris 1.11.2+ | 25 | `neo-voxy-0.3.3-mc26.1.2-neoforge-client.jar` |
+| Minecraft 1.21.1 · NeoForge | 客户端必装，服务端可选 | Sodium 0.8.x / Iris 1.8.12+ | 21 | `neo-voxy-0.5.0-alpha.4-mc1.21.1-neoforge.jar` |
+| Minecraft 1.20.1 · Forge | 仅客户端 | Embeddium / Oculus | 17 | `neo-voxy-0.3.5-alpha.2-mc1.20.1-forge-client.jar` |
+| Minecraft 26.1.2 · NeoForge | 仅客户端 | Sodium 0.9.2 / Iris 1.11.4+ | 25 | `neo-voxy-0.3.4-mc26.1.2-neoforge-client.jar` |
 
 ## 安装与服务器兼容（1.21.1）
 

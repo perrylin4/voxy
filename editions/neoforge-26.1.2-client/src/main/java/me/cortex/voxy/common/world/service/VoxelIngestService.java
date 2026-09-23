@@ -23,6 +23,7 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.lighting.LayerLightSectionStorage.SectionType;
 import org.jetbrains.annotations.NotNull;
 
+/** 26.1.2 NeoForge 的区段摄取服务；将主线程快照交给后台转换器。 */
 public class VoxelIngestService {
    private static final ThreadLocal<VoxelizedSection> SECTION_CACHE = ThreadLocal.withInitial(VoxelizedSection::createEmpty);
    private final Service service;

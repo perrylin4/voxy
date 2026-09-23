@@ -3,7 +3,9 @@ package me.cortex.voxy.common.world;
 import me.cortex.voxy.common.voxelization.VoxelizedSection;
 import me.cortex.voxy.common.world.other.Mapper;
 
+/** 26.1.2 NeoForge 的区段聚合器，向父级 LOD 传播变化和空区段状态。 */
 public class WorldUpdater {
+   /** 在调用线程完成区段写入，保证上层缓存看到完整的聚合结果。 */
    public static void insertUpdate(WorldEngine into, VoxelizedSection section) {
       if (!into.isLive) {
          throw new IllegalStateException("World is not live");

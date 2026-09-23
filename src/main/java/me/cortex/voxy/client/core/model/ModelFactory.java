@@ -50,22 +50,34 @@ import static me.cortex.voxy.client.core.model.ModelStore.MODEL_SIZE;
 import static org.lwjgl.opengl.ARBDirectStateAccess.nglTextureSubImage2D;
 import static org.lwjgl.opengl.GL11.*;
 
-//Manages the storage and updating of model states, textures and colours
-
-//Also has a fast long[] based metadata lookup for when the terrain mesher needs to look up the face occlusion data
-
-
-
-
-// this _quarters_ the memory requirements for the texture atlas!!! WHICH IS HUGE saving
+/**
+ * 方块模型、纹理图集和渲染元数据的 CPU/GPU 侧协调器。
+ *
+ * 模型烘焙是异步的：先登记待处理状态，再由上传队列把结果提交到 GPU。metadataCache 和
+ * idMappings 是地形网格热路径使用的定长查找表，布局不能与 shader 或缓存格式脱节。
+ */
 public class ModelFactory {
     public static final int MODEL_TEXTURE_SIZE = 16;
     public static final int LAYERS = Integer.numberOfTrailingZeros(MODEL_TEXTURE_SIZE);
 
-    // the fluid state in the mipper
-    private record ModelEntry(ColourDepthTextureData down, ColourDepthTextureData up, ColourDepthTextureData north, ColourDepthTextureData south, ColourDepthTextureData west, ColourDepthTextureData east, int fluidBlockStateId, int fluidKind, int tintingColour, boolean framedBlocks, boolean createTrack, boolean conservativeComplexModel, boolean completeComplexBlock) {
+    /** 相同模型和材质的去重键；字段顺序与 GPU 元数据生成保持一致。 */
+    private record ModelEntry(
+            ColourDepthTextureData down,
+            ColourDepthTextureData up,
+            ColourDepthTextureData north,
+            ColourDepthTextureData south,
+            ColourDepthTextureData west,
+            ColourDepthTextureData east,
+            int fluidBlockStateId,
+            int fluidKind,
+            int tintingColour,
+            boolean framedBlocks,
+            boolean createTrack,
+            boolean conservativeComplexModel,
+            boolean completeComplexBlock) {
         public ModelEntry(ColourDepthTextureData[] textures, int fluidBlockStateId, int fluidKind, int tintingColour, boolean framedBlocks, boolean createTrack, boolean conservativeComplexModel, boolean completeComplexBlock) {
-            this(textures[0], textures[1], textures[2], textures[3], textures[4], textures[5], fluidBlockStateId, fluidKind, tintingColour,
+            this(textures[0], textures[1], textures[2], textures[3], textures[4], textures[5],
+                    fluidBlockStateId, fluidKind, tintingColour,
                     framedBlocks, createTrack, conservativeComplexModel, completeComplexBlock);
         }
     }
@@ -73,31 +85,20 @@ public class ModelFactory {
     private final Biome DEFAULT_BIOME = Minecraft.getInstance().level.registryAccess().lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS).value();
 
     public final SoftwareModelTextureBakery bakery2;
-    private final long bakeScratchBuffer = MemoryUtil.nmemAlloc(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*8*6);
+    private final long bakeScratchBuffer = MemoryUtil.nmemAlloc(MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE * 8 * 6);
 
-
-
-    //model data also contains if a face should be randomly rotated,flipped etc to get rid of moire effect
-    // this would be done in the fragment shader
-
-
-
-    // so that full block occlusion can work nicely
-
-
-
+    // 模型元数据和流体查找表：渲染线程通过定长数组读取，避免热路径 Map 查找。
     private final long[] metadataCache;
     private final int[] fluidStateLUT;
     private final int[] fluidKinds;
     private final IdentityHashMap<Fluid, Integer> fluidKindByType = new IdentityHashMap<>();
     private final List<Fluid> fluidKindRepresentatives = new ArrayList<>();
 
-    //Provides a map from id -> model id as multiple ids might have the same internal model id
+    // 多个方块状态可以共享同一个内部模型 ID。
     private final int[] idMappings;
     private final Object2IntOpenHashMap<ModelEntry> modelTexture2id = new Object2IntOpenHashMap<>();
 
-    //Contains the set of all block ids that are currently inflight/being baked
-    // this is required due to "async" nature of gpu feedback
+    // GPU 异步反馈期间的进行中集合，防止递归登记同一个状态。
     private final IntOpenHashSet blockStatesInFlight = new IntOpenHashSet();
     private final ReentrantLock blockStatesInFlightLock = new ReentrantLock();
 
@@ -120,22 +121,22 @@ public class ModelFactory {
 
     private Object2IntMap<BlockState> customBlockStateIdMapping;
 
-    // this _quarters_ the memory requirements for the texture atlas!!! WHICH IS HUGE saving
+    // 初始化空模型后，后续模型按需登记和烘焙。
     public ModelFactory(Mapper mapper, ModelStore storage) {
         this.mapper = mapper;
         this.storage = storage;
         this.bakery2 = new SoftwareModelTextureBakery(mapper);
         this.bakery2.setupTexture();
 
-        this.metadataCache = new long[1<<16];
-        this.fluidStateLUT = new int[1<<16];
-        this.fluidKinds = new int[1<<16];
-        this.idMappings = new int[1<<20];//Max of 1 million blockstates mapping to 65k model states
+        this.metadataCache = new long[1 << 16];
+        this.fluidStateLUT = new int[1 << 16];
+        this.fluidKinds = new int[1 << 16];
+        this.idMappings = new int[1 << 20];
         Arrays.fill(this.idMappings, -1);
         Arrays.fill(this.fluidStateLUT, -1);
 
         this.modelTexture2id.defaultReturnValue(-1);
-        this.addEntry(0);//Add air as the first entry
+        this.addEntry(0);
     }
 
     public void setCustomBlockStateMapping(Object2IntMap<BlockState> mapping) {
@@ -145,14 +146,13 @@ public class ModelFactory {
     private static final record BlockBake(int blockId, BlockState state) {
     }
 
+    /** 登记一个方块状态并把烘焙任务放入异步队列。 */
     public boolean addEntry(int blockId) {
         if (this.idMappings[blockId] != -1) {
             return false;
         }
 
-        // Claim before resolving the fluid dependency. A modded state may point to itself, or two
-        // legacy fluid states may form A -> B -> A; claiming afterwards recurses without reaching
-        // the in-flight guard.
+        // 先占用状态再解析流体依赖，避免自引用或 A→B→A 的循环递归。
         this.blockStatesInFlightLock.lock();
         try {
             if (this.idMappings[blockId] != -1 || !this.blockStatesInFlight.add(blockId)) {
@@ -169,8 +169,7 @@ public class ModelFactory {
                 blockState = sb.baseState.getBlock().withPropertiesOf(blockState);
             }
 
-            // Enqueue an external fluid first. The current state is already claimed, so cyclic
-            // dependencies terminate while ordinary waterlogged models retain fluid-first ordering.
+            // 水logged 模型先登记流体，保证材质表中的流体 ID 已经可用。
             if (!isFluidBlockState(blockState) && !blockState.getFluidState().isEmpty()) {
                 int fluidStateId = this.mapper.getIdForBlockState(
                         blockState.getFluidState().createLegacyBlock());
@@ -195,8 +194,7 @@ public class ModelFactory {
     }
 
     private void retireFailedBake(int blockId) {
-        //Two throw sites fire after the mapping was already set correctly; do not turn a block that
-        //actually baked into air.
+        // 某些异常发生在映射写入之后，不能把已成功烘焙的状态错误回退为空气。
         if (this.idMappings[blockId] == -1) {
             this.idMappings[blockId] = 0;
         }
@@ -219,9 +217,7 @@ public class ModelFactory {
         if (this.pendingEntry != null) {
             this.modelTexture2id.removeInt(this.pendingEntry);
             this.fluidStateLUT[this.pendingModelId] = -1;
-            //The biome-colour list: its entries are (modelId, state) pairs, and addBiome writes each
-            //one straight into MODEL_SIZE*modelId's tint field - a stale pair repaints whatever model
-            //ends up with the id, on the next biome that streams in.
+            // 清理 (modelId, state) 对，避免后续群系上传把颜色写到复用的模型 ID。
             while (this.modelsRequiringBiomeColours.size() > this.pendingBiomeColourEntries) {
                 this.modelsRequiringBiomeColours.remove(this.modelsRequiringBiomeColours.size() - 1);
             }
@@ -249,8 +245,7 @@ public class ModelFactory {
         if (t instanceof ThreadDeath death) {
             throw death;
         }
-        // Stack overflows from hostile model code can be isolated to one state. Other VM failures,
-        // especially OOM, must escape instead of leaving the process alive in an undefined state.
+        // 恶意模型导致的栈溢出可以隔离到单个状态；OOM 等 VM 错误必须继续抛出。
         if (t instanceof VirtualMachineError fatal && !(fatal instanceof StackOverflowError)) {
             throw fatal;
         }
@@ -258,9 +253,10 @@ public class ModelFactory {
 
     private boolean processModelResult() {
         var bake = this.blockBakeQueue.poll();
-        if (bake == null) return false;
-        //Flags derived from a render-only id must be cleared on every exit path - a bake that
-        //throws must not leak its snow overlay or seasonal model into the next block's bake
+        if (bake == null) {
+            return false;
+        }
+        // render-only 标志必须在 finally 清除，避免一次失败污染下一个模型。
         this.bakery2.beginRenderOnlyBake(bake.blockId);
         try {
             return this.processModelResult0(bake);
@@ -283,7 +279,8 @@ public class ModelFactory {
         }
 
 
-        {//Create texture data
+        // 从 native scratch buffer 拆出六个面的颜色和深度纹理。
+        {
             long ptr = this.bakeScratchBuffer;
             final int FACE_SIZE = MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE;
             for (int face = 0; face < 6; face++) {
@@ -291,23 +288,18 @@ public class ModelFactory {
                 int[] colour = new int[FACE_SIZE];
                 int[] depth = new int[FACE_SIZE];
 
-                //Copy out colour
                 for (int i = 0; i < FACE_SIZE; i++) {
-                    ////De-interpolate results
-                    //colour[i] = MemoryUtil.memGetInt(faceDataPtr + (i * 4 * 2));
-                    //depth[i] = MemoryUtil.memGetInt(faceDataPtr + (i * 4 * 2) + 4);
-
-                    long value = MemoryUtil.memGetLong(faceDataPtr+i*8);
-                    colour[i] = (int)value;
-                    depth[i] = (int) (value>>>32);
+                    long value = MemoryUtil.memGetLong(faceDataPtr + i * 8);
+                    colour[i] = (int) value;
+                    depth[i] = (int) (value >>> 32);
                 }
                 textureData[face] = new ColourDepthTextureData(colour, depth, MODEL_TEXTURE_SIZE, MODEL_TEXTURE_SIZE);
             }
         }
 
 
-        boolean hasDarkenedTextures = (flags&2)!=0;
-        boolean isShaded = (flags&1)!=0;
+        boolean hasDarkenedTextures = (flags & 2) != 0;
+        boolean isShaded = (flags & 1) != 0;
         RenderType layer = null;
         if ((flags & 4) != 0) {
             boolean anyTranslucent = false;
@@ -346,23 +338,25 @@ public class ModelFactory {
             this.retireFailedBake(bake.blockId);
             return true;
         }
-        if (bakeResult!=null) {
+        if (bakeResult != null) {
             this.uploadResults.add(bakeResult);
         }
         return !this.blockBakeQueue.isEmpty();
     }
 
     private final ConcurrentLinkedDeque<Mapper.BiomeEntry> biomeQueue = new ConcurrentLinkedDeque<>();
+
     public void addBiome(Mapper.BiomeEntry biome) {
         this.biomeQueue.add(biome);
     }
 
+    /** 在后台线程处理群系和模型烘焙队列，返回是否仍有待处理任务。 */
     public boolean processAllThings() {
         var biomeEntry = this.biomeQueue.poll();
         while (biomeEntry != null) {
             var biomeRegistry = Minecraft.getInstance().level.registryAccess().registryOrThrow(Registries.BIOME);
             var mcbiomeEntry = biomeRegistry.getOptional(ResourceLocation.parse(biomeEntry.biome));
-            if (!mcbiomeEntry.isPresent()) {
+            if (mcbiomeEntry.isEmpty()) {
                 Logger.error("Could not find biome: " + biomeEntry.biome + " using default");
             }
             var res = this.addBiome0(biomeEntry.id, mcbiomeEntry.orElse(DEFAULT_BIOME));
@@ -374,7 +368,9 @@ public class ModelFactory {
 
         while (!Thread.currentThread().isInterrupted() && this.processModelResult());
         return !Thread.currentThread().isInterrupted()
-                && ((this.blockStatesInFlight.size()!=0)||(!this.blockBakeQueue.isEmpty())||!this.biomeQueue.isEmpty());
+                && (this.blockStatesInFlight.size() != 0
+                || !this.blockBakeQueue.isEmpty()
+                || !this.biomeQueue.isEmpty());
     }
 
     public void drainBlendPalette() {
@@ -385,7 +381,9 @@ public class ModelFactory {
 
     public void processUploads(long totalBudgetNanos) {
         var upload = this.uploadResults.poll();
-        if (upload==null) return;
+        if (upload == null) {
+            return;
+        }
         long deadline = System.nanoTime() + Math.max(0L, totalBudgetNanos);
 
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -397,29 +395,33 @@ public class ModelFactory {
             upload.free();
             upload = this.uploadResults.poll();
         } while (upload != null && System.nanoTime() < deadline);
-        if (upload != null) this.uploadResults.addFirst(upload);
+        if (upload != null) {
+            this.uploadResults.addFirst(upload);
+        }
         UploadStream.INSTANCE.commit();
     }
 
     private interface ResultUploader {
         void upload(ModelStore store);
+
         void free();
     }
 
     private static final class ModelBakeResultUpload implements ResultUploader {
         private final MemoryBuffer model = new MemoryBuffer(MODEL_SIZE).zero();
-        private final MemoryBuffer texture = new MemoryBuffer((2L*3*computeSizeWithMips(MODEL_TEXTURE_SIZE))*4);
+        private final MemoryBuffer texture = new MemoryBuffer(
+                (2L * 3 * computeSizeWithMips(MODEL_TEXTURE_SIZE)) * 4);
 
         public int modelId = -1;
 
         public int biomeUploadIndex = -1;
         public @Nullable MemoryBuffer biomeUpload;
 
-        public void upload(ModelStore store) {//Uploads and resets for reuse
+        public void upload(ModelStore store) {
             this.upload(store.modelBuffer, store.modelColourBuffer, store.textures);
         }
 
-        public void upload(GlBuffer modelBuffer, GlBuffer colourBuffer, GlTexture atlas) {//Uploads and resets for reuse
+        public void upload(GlBuffer modelBuffer, GlBuffer colourBuffer, GlTexture atlas) {
             this.model.cpyTo(UploadStream.INSTANCE.upload(modelBuffer, (long) this.modelId * MODEL_SIZE, MODEL_SIZE));
             if (this.biomeUploadIndex != -1) {
                 this.biomeUpload.cpyTo(UploadStream.INSTANCE.upload(colourBuffer, this.biomeUploadIndex * 4L, this.biomeUpload.size));
@@ -428,13 +430,22 @@ public class ModelFactory {
                 this.biomeUpload = null;
             }
 
-            int X = (this.modelId&0xFF) * MODEL_TEXTURE_SIZE*3;
-            int Y = ((this.modelId>>8)&0xFF) * MODEL_TEXTURE_SIZE*2;
+            int x = (this.modelId & 0xFF) * MODEL_TEXTURE_SIZE * 3;
+            int y = ((this.modelId >> 8) & 0xFF) * MODEL_TEXTURE_SIZE * 2;
 
             long cAddr = this.texture.address;
             for (int lvl = 0; lvl < LAYERS; lvl++) {
-                nglTextureSubImage2D(atlas.id, lvl, X >> lvl, Y >> lvl, (MODEL_TEXTURE_SIZE*3) >> lvl, (MODEL_TEXTURE_SIZE*2) >> lvl, GL_RGBA, GL_UNSIGNED_BYTE, cAddr);
-                cAddr += (MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*3*2*4)>>(lvl<<1);
+                nglTextureSubImage2D(
+                        atlas.id,
+                        lvl,
+                        x >> lvl,
+                        y >> lvl,
+                        (MODEL_TEXTURE_SIZE * 3) >> lvl,
+                        (MODEL_TEXTURE_SIZE * 2) >> lvl,
+                        GL_RGBA,
+                        GL_UNSIGNED_BYTE,
+                        cAddr);
+                cAddr += (MODEL_TEXTURE_SIZE * MODEL_TEXTURE_SIZE * 3 * 2 * 4) >> (lvl << 1);
             }
 
             this.modelId = -1;

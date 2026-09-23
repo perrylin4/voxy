@@ -11,19 +11,26 @@ import net.irisshaders.iris.Iris;
 import java.util.function.BooleanSupplier;
 
 public class RenderPipelineFactory {
-    public static AbstractRenderPipeline createPipeline(RenderProperties properties, AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, HierarchicalOcclusionTraverser traversal, BooleanSupplier frexSupplier) {
-        //Note this is where will choose/create e.g. IrisRenderPipeline or normal pipeline
-        AbstractRenderPipeline pipeline = null;
+    public static AbstractRenderPipeline createPipeline(RenderProperties properties,
+                                                        AsyncNodeManager nodeManager,
+                                                        NodeCleaner nodeCleaner,
+                                                        HierarchicalOcclusionTraverser traversal,
+                                                        BooleanSupplier frexSupplier) {
+        // Shader 管线创建失败时必须回退到原版路径，保证进入世界不会因为 Iris 状态中断。
         if (IrisUtil.SHADER_SUPPORT && IrisUtil.irisShaderPackEnabled()) {
-            pipeline = createIrisPipeline(properties, nodeManager, nodeCleaner, traversal, frexSupplier);
+            var irisPipeline = createIrisPipeline(properties, nodeManager, nodeCleaner, traversal, frexSupplier);
+            if (irisPipeline != null) {
+                return irisPipeline;
+            }
         }
-        if (pipeline == null) {
-            pipeline = new NormalRenderPipeline(properties, nodeManager, nodeCleaner, traversal, frexSupplier);
-        }
-        return pipeline;
+        return new NormalRenderPipeline(properties, nodeManager, nodeCleaner, traversal, frexSupplier);
     }
 
-    private static AbstractRenderPipeline createIrisPipeline(RenderProperties properties, AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, HierarchicalOcclusionTraverser traversal, BooleanSupplier frexSupplier) {
+    private static AbstractRenderPipeline createIrisPipeline(RenderProperties properties,
+                                                             AsyncNodeManager nodeManager,
+                                                             NodeCleaner nodeCleaner,
+                                                             HierarchicalOcclusionTraverser traversal,
+                                                             BooleanSupplier frexSupplier) {
         var irisPipe = Iris.getPipelineManager().getPipelineNullable();
         if (irisPipe == null) {
             return null;

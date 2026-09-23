@@ -15,10 +15,12 @@ import static org.lwjgl.opengl.GL20C.nglUniformMatrix4fv;
 import static org.lwjgl.opengl.GL33C.glBindSampler;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 
+/** 管理兼容模组远景绘制使用的 shader，并按管线缓存补丁结果。 */
 public final class DistantShaders {
     private static Shader vertexLight;
     private static Shader uniformLight;
     private static Shader depthOnly;
+    private static AbstractRenderPipeline depthOwner;
 
     private static Shader patchedVertexLight;
     private static Shader patchedUniformLight;
@@ -29,8 +31,35 @@ public final class DistantShaders {
     private static AbstractRenderPipeline patchedOwner;
     private static boolean patchAvailable;
     private static boolean patchFailed;
+    private static AbstractRenderPipeline copycatOwner;
+    private static Shader copycatOpaque, copycatTranslucent;
 
     private DistantShaders() {}
+
+    public static Shader forCopycatPipeline(AbstractRenderPipeline pipeline, boolean translucent) {
+        if (copycatOwner != pipeline) {
+            if (copycatOpaque != null) copycatOpaque.free();
+            if (copycatTranslucent != null) copycatTranslucent.free();
+            copycatOpaque = copycatTranslucent = null;
+            copycatOwner = pipeline;
+        }
+        Shader shader = translucent ? copycatTranslucent : copycatOpaque;
+        if (shader == null) {
+            String source = ShaderLoader.parse("voxy:compat/distant.frag");
+            String fragment = translucent ? pipeline.patchTranslucentShader(null, source)
+                    : pipeline.patchOpaqueShader(null, source);
+            if (translucent && fragment == null) fragment = pipeline.patchOpaqueShader(null, source);
+            shader = Shader.make().define("COPYCAT_OCCLUSION")
+                    .defineIf("TRANSLUCENT", translucent).defineIf("PATCHED_SHADER", fragment != null)
+                    .addSource(ShaderType.VERTEX, fragment != null ? patchedVertex(pipeline)
+                            : ShaderLoader.parse("voxy:compat/distant.vert"))
+                    .addSource(ShaderType.FRAGMENT, fragment != null ? fragment : source)
+                    .compile().name(translucent ? "copycat_translucent" : "copycat_opaque");
+            if (translucent) copycatTranslucent = shader;
+            else copycatOpaque = shader;
+        }
+        return shader;
+    }
 
     public static void warmup(AbstractRenderPipeline pipeline) {
         if (!net.neoforged.fml.ModList.get().isLoaded("create")) {
@@ -162,10 +191,16 @@ public final class DistantShaders {
         return uniformLight;
     }
 
-    public static Shader depthOnly() {
+    public static Shader depthOnly(AbstractRenderPipeline pipeline) {
+        if (depthOwner != pipeline) {
+            if (depthOnly != null) depthOnly.free();
+            depthOnly = null;
+            depthOwner = pipeline;
+        }
         if (depthOnly == null) {
             depthOnly = Shader.make()
-                    .add(ShaderType.VERTEX, "voxy:compat/distant.vert")
+                    .define("TRAIN_DEPTH_REPLAY")
+                    .addSource(ShaderType.VERTEX, patchedVertex(pipeline))
                     .add(ShaderType.FRAGMENT, "voxy:compat/distant_depth.frag")
                     .compile().name("distant_depth_only");
         }

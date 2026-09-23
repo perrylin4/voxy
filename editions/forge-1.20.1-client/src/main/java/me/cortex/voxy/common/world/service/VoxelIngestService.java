@@ -21,6 +21,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 
+/** 1.20.1 Forge 的区段摄取服务；队列任务始终携带世界引用。 */
 public class VoxelIngestService {
     private static final ThreadLocal<VoxelizedSection> SECTION_CACHE = ThreadLocal.withInitial(VoxelizedSection::createEmpty);
     private final Service service;

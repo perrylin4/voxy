@@ -4,9 +4,6 @@ import com.mojang.blaze3d.opengl.GlTexture;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.TextureFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.model.ModelFactory;
 import me.cortex.voxy.common.util.UnsafeUtil;
@@ -42,6 +39,11 @@ import org.lwjgl.opengl.GL15C;
 import org.lwjgl.opengl.GL30C;
 import org.lwjgl.system.MemoryUtil;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+/** 26.1.2 NeoForge 的离线模型投影器，使用该版本 GPU 纹理接口读取图集。 */
 public class SoftwareModelTextureBakery {
    private static final Matrix4f[] VIEWS = new Matrix4f[6];
    private final ReuseVertexConsumer opaqueVC = new ReuseVertexConsumer();

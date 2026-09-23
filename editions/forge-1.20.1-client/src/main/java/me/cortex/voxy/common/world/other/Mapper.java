@@ -42,6 +42,7 @@ import java.util.function.Consumer;
 
 //There are independent mappings for biome and block states, these get combined in the shader and allow for more
 // variaty of things
+/** 1.20.1 Forge 的方块/生物群系 ID 映射器，编码布局与主版本一致。 */
 public class Mapper {
     private static final long SURFACE_CARRIER_BLOCK_MASK = (1L << 20) - 1L;
     private static final long SURFACE_CARRIER_FLAG = 1L << 20;

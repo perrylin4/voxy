@@ -1,181 +1,212 @@
 package me.cortex.voxy;
 
+import me.cortex.voxy.client.VoxyJoinMessage;
+import me.cortex.voxy.client.compat.LodPipelineHooks;
+import me.cortex.voxy.client.compat.copycat.CopycatDistantRenderer;
+import me.cortex.voxy.client.compat.create.DistantContraptionManager;
+import me.cortex.voxy.client.compat.create.DistantContraptionRenderer;
+import me.cortex.voxy.client.compat.create.DistantKineticRenderer;
+import me.cortex.voxy.client.compat.create.DistantOcclusionDebug;
+import me.cortex.voxy.client.compat.create.DistantTrackRenderer;
+import me.cortex.voxy.client.compat.create.DistantTrainManager;
+import me.cortex.voxy.client.compat.create.DistantTrainRenderer;
+import me.cortex.voxy.client.compat.domum.DomumDistantRenderer;
+import me.cortex.voxy.client.compat.littletiles.LittleTilesDistantRenderer;
+import me.cortex.voxy.client.compat.powergrid.PowerGridWireRenderer;
+import me.cortex.voxy.client.compat.simulated.DistantLaserRenderer;
+import me.cortex.voxy.client.core.beacon.DistantBeaconRenderer;
+import me.cortex.voxy.client.core.compat.eclipticseasons.EsCompatGate;
+import me.cortex.voxy.client.core.compat.eclipticseasons.VoxyEsHandler;
 import me.cortex.voxy.client.config.VoxyNeoForgeConfig;
+import me.cortex.voxy.commonImpl.compat.create.CreateServerConfig;
+import me.cortex.voxy.commonImpl.compat.create.CreateTrainSampler;
+import me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol;
+import me.cortex.voxy.compat.far.FarEntityClient;
+import me.cortex.voxy.compat.far.FarEntityProtocol;
+import me.cortex.voxy.compat.far.FarEntityService;
+import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.loading.FMLLoader;
-import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 import net.neoforged.neoforge.client.gui.ConfigurationScreen;
+import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 
 /**
- * Main mod class for Voxy on NeoForge.
+ * NeoForge 1.21.1 的模组入口。
  *
- * Handles config registration and config screen setup.
- * Actual initialization happens via mixins (MixinRenderSystem).
+ * 这里只负责把平台事件接到各功能模块；渲染和世界数据实现分别位于 client、common
+ * 与 commonImpl 包中，避免入口类承担具体业务逻辑。
  */
 @Mod("voxy")
 public class Voxy {
     public static final String MODID = "voxy";
 
-    private final me.cortex.voxy.compat.far.FarEntityService farEntityService = new me.cortex.voxy.compat.far.FarEntityService();
+    private final FarEntityService farEntityService = new FarEntityService();
 
     public Voxy(IEventBus modEventBus, ModContainer container) {
+        registerCommonEvents(modEventBus);
+        registerCreateServerEvents(modEventBus, container);
 
-        //Far players / ridden vehicles: server samples player snapshots, client renders lightweight
-        //proxies past the entity view distance
-        modEventBus.addListener(this::registerFarEntityPayloads);
-        NeoForge.EVENT_BUS.addListener(this.farEntityService::onServerTick);
-        NeoForge.EVENT_BUS.addListener(this.farEntityService::onPlayerLoggedOut);
-
-        if (ModList.get().isLoaded("create")) {
-            modEventBus.addListener(Voxy::registerPayloads);
-            //Server-side train sampling (works on the integrated server too). The sampler class is
-            //the only place that touches Create classes, so it must stay behind this gate.
-            NeoForge.EVENT_BUS.register(me.cortex.voxy.commonImpl.compat.create.CreateTrainSampler.INSTANCE);
-            //Dedicated-server uniform ceiling for distant-train streaming (voxy-server.toml). Loads on
-            //dedicated and integrated servers alike; pushes its values into the sampler's control point.
-            me.cortex.voxy.commonImpl.compat.create.CreateServerConfig.register(container, modEventBus);
-        }
-
-        // Only register client config on client side
         if (FMLLoader.getDist() == Dist.CLIENT) {
-            // Register NeoForge config
-            VoxyNeoForgeConfig.register(container);
-
-            // Register the built-in NeoForge config screen
-            container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
-
-            // Build/maintainer/repo line on world join (showJoinMessage in voxy-config.json)
-            NeoForge.EVENT_BUS.register(me.cortex.voxy.client.VoxyJoinMessage.INSTANCE);
-
-            // Voxy's Sodium video-settings page is registered by VoxyConfigMenu (@ConfigEntryPointForge,
-            // Sodium 0.8 native config API), not here.
-
-            if (me.cortex.voxy.client.core.compat.eclipticseasons.EsCompatGate.shouldArm()) {
-                NeoForge.EVENT_BUS.register(me.cortex.voxy.client.core.compat.eclipticseasons.VoxyEsHandler.INSTANCE);
-            }
-
-            if (ModList.get().isLoaded("create")) {
-                var trainRenderer = new me.cortex.voxy.client.compat.create.DistantTrainRenderer();
-                NeoForge.EVENT_BUS.register(trainRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(trainRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.frameDebugProbe =
-                        me.cortex.voxy.client.compat.create.DistantOcclusionDebug.PROBE;
-                //Bogey snapshot capture touches Create's registries, so it stays behind this gate
-                me.cortex.voxy.client.compat.create.DistantTrainRenderer.bogeyMeshProvider =
-                        me.cortex.voxy.client.compat.create.DistantBogeyMeshes::getOrCapture;
-                var trackRenderer = new me.cortex.voxy.client.compat.create.DistantTrackRenderer();
-                NeoForge.EVENT_BUS.register(trackRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(trackRenderer);
-
-                //Distant contraption snapshots: freeze bearings/pistons/gantries/mounted contraptions
-                //the player walked past and draw them statically beyond the render distance. Tick hook
-                //refreshes snapshots in range; the LOD hook draws the frozen ones.
-                var contraptionRenderer = new me.cortex.voxy.client.compat.create.DistantContraptionRenderer();
-                NeoForge.EVENT_BUS.register(contraptionRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(contraptionRenderer);
-
-                //Frozen kinetic moving parts (shafts/cogs past the render distance) drawn per-section
-                //in the LOD; the cull mixins queue captures/removals, the tick hook bakes them.
-                var kineticRenderer = new me.cortex.voxy.client.compat.create.DistantKineticRenderer();
-                NeoForge.EVENT_BUS.register(kineticRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(kineticRenderer);
-
-                var copycatRenderer = new me.cortex.voxy.client.compat.copycat.CopycatDistantRenderer();
-                NeoForge.EVENT_BUS.register(copycatRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(copycatRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.registerTranslucent(copycatRenderer);
-
-                //Ship-borne kinetics render natively (a ship is one connected drivetrain - copies
-                //cannot keep adjacent shafts in sync); the cull exempts them entirely.
-            }
-
-            if (ModList.get().isLoaded("littletiles")) {
-                var littleTilesRenderer = new me.cortex.voxy.client.compat.littletiles.LittleTilesDistantRenderer();
-                NeoForge.EVENT_BUS.register(littleTilesRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(littleTilesRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.registerTranslucent(littleTilesRenderer);
-            }
-
-            if (ModList.get().isLoaded("domum_ornamentum")) {
-                var domumRenderer = new me.cortex.voxy.client.compat.domum.DomumDistantRenderer();
-                NeoForge.EVENT_BUS.register(domumRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(domumRenderer);
-            }
-
-            if (ModList.get().isLoaded("powergrid")) {
-                var wireRenderer = new me.cortex.voxy.client.compat.powergrid.PowerGridWireRenderer();
-                NeoForge.EVENT_BUS.register(wireRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.register(wireRenderer);
-            }
-
-            if (ModList.get().isLoaded("simulated")) {
-                var laserRenderer = new me.cortex.voxy.client.compat.simulated.DistantLaserRenderer();
-                NeoForge.EVENT_BUS.register(laserRenderer);
-                me.cortex.voxy.client.compat.LodPipelineHooks.registerTranslucent(laserRenderer);
-            }
-
-            //Beacon beams derived from the voxel store, so one shows up whether or not its chunk was
-            //ever loaded this session. Vanilla, not create - registered unconditionally.
-            var beaconRenderer = new me.cortex.voxy.client.core.beacon.DistantBeaconRenderer();
-            NeoForge.EVENT_BUS.register(beaconRenderer);
-            me.cortex.voxy.client.compat.LodPipelineHooks.register(beaconRenderer);
+            registerClientEvents(container);
         }
     }
 
-    private static void registerPayloads(net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent event) {
+    /** 注册服务端和客户端都需要的远景实体通道。 */
+    private void registerCommonEvents(IEventBus modEventBus) {
+        modEventBus.addListener(this::registerFarEntityPayloads);
+        NeoForge.EVENT_BUS.addListener(farEntityService::onServerTick);
+        NeoForge.EVENT_BUS.addListener(farEntityService::onPlayerLoggedOut);
+    }
+
+    /** Create 的采样和网络协议只能在 Create 存在时触碰，避免可选类提前加载。 */
+    private static void registerCreateServerEvents(IEventBus modEventBus, ModContainer container) {
+        if (!ModList.get().isLoaded("create")) {
+            return;
+        }
+
+        modEventBus.addListener(Voxy::registerPayloads);
+        NeoForge.EVENT_BUS.register(CreateTrainSampler.INSTANCE);
+        CreateServerConfig.register(container, modEventBus);
+    }
+
+    /** 注册客户端配置、渲染器和所有可选联动。 */
+    private static void registerClientEvents(ModContainer container) {
+        VoxyNeoForgeConfig.register(container);
+        container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
+        NeoForge.EVENT_BUS.register(VoxyJoinMessage.INSTANCE);
+
+        registerEclipticSeasons();
+        registerCreateClientEvents();
+        registerOptionalClientIntegrations();
+        registerBeaconRenderer();
+    }
+
+    private static void registerEclipticSeasons() {
+        if (EsCompatGate.shouldArm()) {
+            NeoForge.EVENT_BUS.register(VoxyEsHandler.INSTANCE);
+        }
+    }
+
+    /** Create 的每个远景渲染器独立注册，便于按功能开关和排查兼容问题。 */
+    private static void registerCreateClientEvents() {
+        if (!ModList.get().isLoaded("create")) {
+            return;
+        }
+
+        var trainRenderer = new DistantTrainRenderer();
+        NeoForge.EVENT_BUS.register(trainRenderer);
+        LodPipelineHooks.register(trainRenderer);
+        LodPipelineHooks.frameDebugProbe = DistantOcclusionDebug.PROBE;
+        DistantTrainRenderer.bogeyMeshProvider = me.cortex.voxy.client.compat.create.DistantBogeyMeshes::getOrCapture;
+
+        var trackRenderer = new DistantTrackRenderer();
+        NeoForge.EVENT_BUS.register(trackRenderer);
+        LodPipelineHooks.register(trackRenderer);
+
+        var contraptionRenderer = new DistantContraptionRenderer();
+        NeoForge.EVENT_BUS.register(contraptionRenderer);
+        LodPipelineHooks.register(contraptionRenderer);
+
+        var kineticRenderer = new DistantKineticRenderer();
+        NeoForge.EVENT_BUS.register(kineticRenderer);
+        LodPipelineHooks.register(kineticRenderer);
+
+        var copycatRenderer = new CopycatDistantRenderer();
+        NeoForge.EVENT_BUS.register(copycatRenderer);
+        LodPipelineHooks.register(copycatRenderer);
+        LodPipelineHooks.registerTranslucent(copycatRenderer);
+    }
+
+    /** 注册不依赖 Create 的可选客户端联动。 */
+    private static void registerOptionalClientIntegrations() {
+        if (ModList.get().isLoaded("littletiles")) {
+            var renderer = new LittleTilesDistantRenderer();
+            NeoForge.EVENT_BUS.register(renderer);
+            LodPipelineHooks.register(renderer);
+            LodPipelineHooks.registerTranslucent(renderer);
+        }
+
+        if (ModList.get().isLoaded("domum_ornamentum")) {
+            var renderer = new DomumDistantRenderer();
+            NeoForge.EVENT_BUS.register(renderer);
+            LodPipelineHooks.register(renderer);
+        }
+
+        if (ModList.get().isLoaded("powergrid")) {
+            var renderer = new PowerGridWireRenderer();
+            NeoForge.EVENT_BUS.register(renderer);
+            LodPipelineHooks.register(renderer);
+        }
+
+        if (ModList.get().isLoaded("simulated")) {
+            var renderer = new DistantLaserRenderer();
+            NeoForge.EVENT_BUS.register(renderer);
+            LodPipelineHooks.registerTranslucent(renderer);
+        }
+    }
+
+    private static void registerBeaconRenderer() {
+        var renderer = new DistantBeaconRenderer();
+        NeoForge.EVENT_BUS.register(renderer);
+        LodPipelineHooks.register(renderer);
+    }
+
+    /** Create 服务端向客户端发送远景列车和动态结构状态。 */
+    private static void registerPayloads(RegisterPayloadHandlersEvent event) {
         var registrar = event.registrar("1").optional();
         registrar.playToClient(
-                me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.CarriageShapePayload.TYPE,
-                me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.CarriageShapePayload.CODEC,
-                (payload, ctx) -> {
+                DistantTrainProtocol.CarriageShapePayload.TYPE,
+                DistantTrainProtocol.CarriageShapePayload.CODEC,
+                (payload, context) -> {
                     if (FMLLoader.getDist() == Dist.CLIENT) {
-                        ctx.enqueueWork(() -> me.cortex.voxy.client.compat.create.DistantTrainManager.handleShape(payload));
+                        context.enqueueWork(() -> DistantTrainManager.handleShape(payload));
                     }
                 });
         registrar.playToClient(
-                me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.TrainPosesPayload.TYPE,
-                me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.TrainPosesPayload.CODEC,
-                (payload, ctx) -> {
+                DistantTrainProtocol.TrainPosesPayload.TYPE,
+                DistantTrainProtocol.TrainPosesPayload.CODEC,
+                (payload, context) -> {
                     if (FMLLoader.getDist() == Dist.CLIENT) {
-                        ctx.enqueueWork(() -> me.cortex.voxy.client.compat.create.DistantTrainManager.handlePoses(payload));
+                        context.enqueueWork(() -> DistantTrainManager.handlePoses(payload));
                     }
                 });
         registrar.playToClient(
-                me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.ContraptionPosesPayload.TYPE,
-                me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.ContraptionPosesPayload.CODEC,
-                (payload, ctx) -> {
+                DistantTrainProtocol.ContraptionPosesPayload.TYPE,
+                DistantTrainProtocol.ContraptionPosesPayload.CODEC,
+                (payload, context) -> {
                     if (FMLLoader.getDist() == Dist.CLIENT && ModList.get().isLoaded("create")) {
-                        ctx.enqueueWork(() -> me.cortex.voxy.client.compat.create.DistantContraptionManager
-                                .handleRemotePoses(payload));
+                        context.enqueueWork(() -> DistantContraptionManager.handleRemotePoses(payload));
                     }
                 });
     }
 
-    private void registerFarEntityPayloads(net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent event) {
+    /** 远景玩家协议在服务端始终注册，客户端接收端只在客户端分发。 */
+    private void registerFarEntityPayloads(RegisterPayloadHandlersEvent event) {
         var registrar = event.registrar("voxy")
-                .versioned(Integer.toString(me.cortex.voxy.compat.far.FarEntityProtocol.VERSION))
+                .versioned(Integer.toString(FarEntityProtocol.VERSION))
                 .optional();
 
         registrar.playToServer(
-                me.cortex.voxy.compat.far.FarEntityProtocol.HelloPayload.TYPE,
-                me.cortex.voxy.compat.far.FarEntityProtocol.HelloPayload.STREAM_CODEC,
+                FarEntityProtocol.HelloPayload.TYPE,
+                FarEntityProtocol.HelloPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() ->
-                        this.farEntityService.handleHello((net.minecraft.server.level.ServerPlayer) context.player(), payload.hello())));
+                        farEntityService.handleHello((ServerPlayer) context.player(), payload.hello())));
 
         if (FMLLoader.getDist() == Dist.CLIENT) {
             registrar.playToClient(
-                    me.cortex.voxy.compat.far.FarEntityProtocol.PlayersPayload.TYPE,
-                    me.cortex.voxy.compat.far.FarEntityProtocol.PlayersPayload.STREAM_CODEC,
-                    (payload, context) -> context.enqueueWork(() -> me.cortex.voxy.compat.far.FarEntityClient.handle(payload.batch())));
+                    FarEntityProtocol.PlayersPayload.TYPE,
+                    FarEntityProtocol.PlayersPayload.STREAM_CODEC,
+                    (payload, context) -> context.enqueueWork(() -> FarEntityClient.handle(payload.batch())));
         } else {
             registrar.playToClient(
-                    me.cortex.voxy.compat.far.FarEntityProtocol.PlayersPayload.TYPE,
-                    me.cortex.voxy.compat.far.FarEntityProtocol.PlayersPayload.STREAM_CODEC,
+                    FarEntityProtocol.PlayersPayload.TYPE,
+                    FarEntityProtocol.PlayersPayload.STREAM_CODEC,
                     (payload, context) -> { });
         }
     }

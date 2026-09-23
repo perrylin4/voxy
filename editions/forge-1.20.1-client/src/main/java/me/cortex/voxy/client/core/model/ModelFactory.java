@@ -52,27 +52,15 @@ import static me.cortex.voxy.client.core.model.ModelStore.MODEL_SIZE;
 import static org.lwjgl.opengl.ARBDirectStateAccess.nglTextureSubImage2D;
 import static org.lwjgl.opengl.GL11.*;
 
-//Manages the storage and updating of model states, textures and colours
-
-//Also has a fast long[] based metadata lookup for when the terrain mesher needs to look up the face occlusion data
-
-//TODO: support more than 65535 states, what should actually happen is a blockstate is registered, the model data is generated, then compared
-// to all other models already loaded, if it is a duplicate, create a mapping from the id to the already loaded id, this will help with meshing aswell
-// as leaves and such will be able to be merged
-
-
-
-//TODO: NOTE!!! is it worth even uploading as a 16x16 texture, since automatic lod selection... doing 8x8 textures might be perfectly ok!!!
-// this _quarters_ the memory requirements for the texture atlas!!! WHICH IS HUGE saving
+/** 管理 1.20.1 的模型状态、六面纹理和供建面器读取的元数据缓存。 */
 public class ModelFactory {
     public static final int MODEL_TEXTURE_SIZE = 16;
     public static final int LAYERS = Integer.numberOfTrailingZeros(MODEL_TEXTURE_SIZE);
 
-    //TODO: replace the fluid BlockState with a client model id integer of the fluidState, requires looking up
-    // the fluid state in the mipper
-    private record ModelEntry(ColourDepthTextureData down, ColourDepthTextureData up, ColourDepthTextureData north, ColourDepthTextureData south, ColourDepthTextureData west, ColourDepthTextureData east, int fluidBlockStateId, int tintingColour, boolean leafModel) {
-        public ModelEntry(ColourDepthTextureData[] textures, int fluidBlockStateId, int tintingColour, boolean leafModel) {
-            this(textures[0], textures[1], textures[2], textures[3], textures[4], textures[5], fluidBlockStateId, tintingColour, leafModel);
+    // 模型去重键的字段顺序与 GPU 元数据写入顺序保持一致。
+    private record ModelEntry(ColourDepthTextureData down, ColourDepthTextureData up, ColourDepthTextureData north, ColourDepthTextureData south, ColourDepthTextureData west, ColourDepthTextureData east, int fluidBlockStateId, int tintingColour, boolean leafModel, boolean trackModel) {
+        public ModelEntry(ColourDepthTextureData[] textures, int fluidBlockStateId, int tintingColour, boolean leafModel, boolean trackModel) {
+            this(textures[0], textures[1], textures[2], textures[3], textures[4], textures[5], fluidBlockStateId, tintingColour, leafModel, trackModel);
         }
     }
 
@@ -164,6 +152,8 @@ public class ModelFactory {
 
     private static final record BlockBake(int blockId, BlockState state) {
     }
+
+    // ---- 模型登记与异步上传 -------------------------------------------
 
     public boolean addEntry(int blockId) {
         if (this.idMappings[blockId] != -1) {
@@ -316,6 +306,7 @@ public class ModelFactory {
         this.biomeQueue.add(biome);
     }
 
+    /** 在服务线程上推进模型和生物群系队列，返回是否仍有待处理工作。 */
     public boolean processAllThings() {
         var biomeEntry = this.biomeQueue.poll();
         while (biomeEntry != null) {
@@ -404,6 +395,8 @@ public class ModelFactory {
         }
     }
 
+    // ---- 纹理元数据与染色 ---------------------------------------------
+
     private ModelBakeResultUpload processTextureBakeResult(int blockId, BlockState blockState,
                                                             ColourDepthTextureData[] textureData,
                                                             boolean isShaded, boolean darkenedTinting,
@@ -456,7 +449,7 @@ public class ModelFactory {
 
         ModelEntry entry;
         {//Deduplicate same entries
-            entry = new ModelEntry(textureData, clientFluidStateId, isBiomeColourDependent||colourProvider==null?-1:captureColourConstant(colourProvider, blockState, DEFAULT_BIOME)|0xFF000000, leafModel);
+            entry = new ModelEntry(textureData, clientFluidStateId, isBiomeColourDependent||colourProvider==null?-1:captureColourConstant(colourProvider, blockState, DEFAULT_BIOME)|0xFF000000, leafModel, me.cortex.voxy.client.compat.distant.TrackLodReplacement.isTrack(blockState));
             int possibleDuplicate = this.modelTexture2id.getInt(entry);
             if (possibleDuplicate != -1) {//Duplicate found
                 this.idMappings[blockId] = possibleDuplicate;
@@ -688,6 +681,7 @@ public class ModelFactory {
         modelFlags |= isFluid && blockState.getFluidState().is(FluidTags.LAVA) ? 64 : 0;
         modelFlags |= leafModel ? 128 : 0;
         modelFlags |= fluidHeight << 8;
+        modelFlags |= me.cortex.voxy.client.compat.distant.TrackLodReplacement.isTrack(blockState) ? (1 << 13) : 0;
 
         //modelFlags |= blockRenderLayer == RenderLayer.getSolid()?0:1;// should discard alpha
         MemoryUtil.memPutInt(uploadPtr, modelFlags); uploadPtr += 4;
@@ -864,19 +858,21 @@ public class ModelFactory {
         return result;
     }
 
-    private static BlockColor getColourProvider(Block block) {
+    private BlockColor getColourProvider(Block block) {
         BlockState state = block.defaultBlockState();
         var colors = Minecraft.getInstance().getBlockColors();
-        int colour = colors.getColor(state, null, BlockPos.ZERO, 0);
-        // Keep the pre-foliage-fix behaviour for fluids and all other blocks:
-        // their null-context probe uses 0 as the no-provider sentinel.  The
-        // 1.20.1 renderer additionally returns -1 for unregistered foliage;
-        // only treat that value as absent for leaves, otherwise water would be
-        // routed through a new tint path and become white in no-shader LODs.
+        BlockColor provider = colors::getColor;
+        int colour;
+        try {
+            colour = captureColourConstant(provider, state, DEFAULT_BIOME);
+        } catch (Exception ignored) {
+            return null;
+        }
+        // In 1.20.1, leaves use -1 for a missing provider; fluids still need the existing path.
         if (colour == 0 || (isLeafBlockState(state) && colour == -1)) {
             return null;
         }
-        return colors::getColor;
+        return provider;
     }
 
     //TODO: add a method to detect biome dependent colours (can do by detecting if getColor is ever called)
@@ -1014,6 +1010,8 @@ public class ModelFactory {
         }
         return res;
     }
+
+    // ---- 渲染热路径查询与资源释放 -------------------------------------
 
     public int[] _unsafeRawAccess() {
         return this.idMappings;

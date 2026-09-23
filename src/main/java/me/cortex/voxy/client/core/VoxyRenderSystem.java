@@ -3,9 +3,10 @@ package me.cortex.voxy.client.core;
 import com.mojang.blaze3d.platform.GlConst;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
-
+import me.cortex.voxy.client.FrameProfiler;
 import me.cortex.voxy.client.TimingStatistics;
 import me.cortex.voxy.client.VoxyClient;
+import me.cortex.voxy.client.compat.create.DistantShaders;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlTexture;
@@ -31,9 +32,17 @@ import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.world.WorldEngine;
+import me.cortex.voxy.common.world.WorldSection;
+import me.cortex.voxy.commonImpl.PerfStats;
 import me.cortex.voxy.commonImpl.VoxyCommon;
+import me.cortex.voxy.commonImpl.VoxyProfile;
+import net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.material.FogType;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.opengl.GL11;
@@ -54,6 +63,12 @@ import static org.lwjgl.opengl.GL33.glBindSampler;
 import static org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BUFFER;
 import static org.lwjgl.opengl.GL43C.GL_SHADER_STORAGE_BUFFER_BINDING;
 
+/**
+ * 客户端 LOD 渲染系统。
+ *
+ * 初始化阶段组装模型、层次遍历、区块遮挡和绘制后端；每帧阶段只负责准备视口、执行
+ * 管线并恢复 Minecraft 的 GL 状态。资源释放顺序与创建顺序相反。
+ */
 public class VoxyRenderSystem {
     // Hot-reloadable render pressure tables. Index is VoxyConfig.renderPressure:
     // 0 = maximum FPS / slowest LOD catch-up, 4 = fastest LOD catch-up / highest frame pressure.
@@ -88,31 +103,32 @@ public class VoxyRenderSystem {
     private Viewport<?> pendingUnpatchedIrisViewport;
 
 
-    public String getPipelineName() { return this.pipeline == null ? "none" : this.pipeline.getClass().getSimpleName(); }
+    public String getPipelineName() {
+        return this.pipeline == null ? "none" : this.pipeline.getClass().getSimpleName();
+    }
 
-    private static AbstractSectionRenderer.Factory<?,? extends IGeometryData> getRenderBackendFactory() {
+    private static AbstractSectionRenderer.Factory<?, ? extends IGeometryData> getRenderBackendFactory() {
         return MDICSectionRenderer.FACTORY;
     }
 
     public VoxyRenderSystem(WorldEngine world, ServiceManager sm) {
-        //Keep the world loaded, NOTE: this is done FIRST, to keep and ensure that even if the rest of loading takes more
-        // than timeout, we keep the world acquired
+        // 先持有世界引用，再创建其他渲染资源，防止初始化超时期间世界被回收。
         world.acquireRef();
         Logger.info("Creating Voxy render system");
 
-        if (Minecraft.getInstance().options.renderDistance().get()<3) {
+        if (Minecraft.getInstance().options.renderDistance().get() < 3) {
             String msg = "Voxy: Having a vanilla render distance of 2 can cause rare culling near the edge of your screen issues, please use 3 or more";
             Logger.warn(msg);
             Minecraft.getInstance().getChatListener().handleSystemMessage(Component.literal(msg), false);
         }
 
-        //Fking HATE EVERYTHING AAAAAAAAAAAAAAAA
+        // 进入管线前保存外部 SSBO 绑定，退出时完整恢复调用方状态。
         for (int i = 0; i < this.savedBufferBindings.length; i++) {
             this.savedBufferBindings[i] = glGetIntegeri(GL_SHADER_STORAGE_BUFFER_BINDING, i);
         }
 
         try {
-            //wait for opengl to be finished, this should hopefully ensure all memory allocations are free
+            // 等待 GPU 完成上一阶段，确保旧资源已经不再被使用。
             glFinish();
             glFinish();
 
@@ -124,7 +140,7 @@ public class VoxyRenderSystem {
                 this.modelService = new ModelBakerySubsystem(world.getMapper());
                 this.renderGen = new RenderGenerationService(world, this.modelService, sm, IUsesMeshlets.class.isAssignableFrom(backendFactory.clz()));
 
-                this.geometryData = new BasicSectionGeometryData(1<<20, RenderResourceReuse.getOrCreateGeometryBuffer());
+                this.geometryData = new BasicSectionGeometryData(1 << 20, RenderResourceReuse.getOrCreateGeometryBuffer());
 
                 this.nodeManager = new AsyncNodeManager(1 << 21, this.geometryData, this.renderGen);
                 this.nodeCleaner = new NodeCleaner(this.nodeManager);
@@ -139,14 +155,13 @@ public class VoxyRenderSystem {
             }
 
             this.pipeline = RenderPipelineFactory.createPipeline(this.properties, this.nodeManager, this.nodeCleaner, this.traversal, this::frexStillHasWork);
-            this.pipeline.setupExtraModelBakeryData(this.modelService);//Configure the model service
+            this.pipeline.setupExtraModelBakeryData(this.modelService);
 
-            //Late stage traversal compile for shaders with taa
+            // TAA 依赖最终管线定义，因此必须在管线创建后编译遍历 shader。
             this.traversal.lateStageCompile(this.pipeline);
 
-            //Compile the Create distant renderers' shaders here rather than on first draw - linking
-            //them blocks the render thread long enough to be a visible hitch mid-gameplay
-            me.cortex.voxy.client.compat.create.DistantShaders.warmup(this.pipeline);
+            // 提前链接 Create 远景 shader，避免第一次绘制时阻塞游戏线程。
+            DistantShaders.warmup(this.pipeline);
 
 
             var sectionRenderer = backendFactory.create(this.pipeline, this.modelService.getStore(), this.geometryData);
@@ -157,7 +172,7 @@ public class VoxyRenderSystem {
                 int minSec = Minecraft.getInstance().level.getMinSection() >> 5;
                 int maxSec = (Minecraft.getInstance().level.getMaxSection() - 1) >> 5;
 
-                //Do some very cheeky stuff for MiB
+                // Mine in Abyss 使用自定义世界分区范围。
                 if (VoxyCommon.IS_MINE_IN_ABYSS) {
                     minSec = -8;
                     maxSec = 7;
@@ -174,8 +189,10 @@ public class VoxyRenderSystem {
 
             this.chunkBoundRenderer = new ChunkBoundRenderer(this.pipeline);
             // A Voxy-only reload must repopulate the mask even when Sodium kept its render list.
-            var sodiumRenderer = net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer.instanceNullable();
-            if (sodiumRenderer != null) sodiumRenderer.scheduleTerrainUpdate();
+            var sodiumRenderer = SodiumWorldRenderer.instanceNullable();
+            if (sodiumRenderer != null) {
+                sodiumRenderer.scheduleTerrainUpdate();
+            }
 
             Logger.info("Voxy render system created with " + this.geometryData.getMaxCapacity() + " geometry capacity, using pipeline '" + this.pipeline.getClass().getSimpleName() + "' with renderer '" + sectionRenderer.getClass().getSimpleName() + "'");
         } catch (RuntimeException e) {
@@ -198,17 +215,22 @@ public class VoxyRenderSystem {
     }
 
 
-    public Viewport<?> setupViewport(Matrix4fc vanillaProjection, Matrix4fc modelView, double cameraX, double cameraY, double cameraZ) {
+    /** 根据原版相机和当前管线创建本帧 LOD 视口。 */
+    public Viewport<?> setupViewport(Matrix4fc vanillaProjection,
+                                     Matrix4fc modelView,
+                                     double cameraX,
+                                     double cameraY,
+                                     double cameraZ) {
         var viewport = this.getViewport();
         if (viewport == null) {
             return null;
         }
 
-        //Do some very cheeky stuff for MiB
+        // Mine in Abyss 会把相机映射到自定义的分区坐标中。
         if (VoxyCommon.IS_MINE_IN_ABYSS) {
-            int sector = (((int)Math.floor(cameraX)>>4)+512)>>10;
-            cameraX -= sector<<14;//10+4
-            cameraY += (16+(256-32-sector*30))*16;
+            int sector = (((int) Math.floor(cameraX) >> 4) + 512) >> 10;
+            cameraX -= sector << 14;
+            cameraY += (16 + (256 - 32 - sector * 30)) * 16;
         }
 
         // Packs that opt in can match the projection far plane to Voxy's configured section cube.
@@ -224,11 +246,12 @@ public class VoxyRenderSystem {
         int width = this.viewportDimensions[2];
         int height = this.viewportDimensions[3];
 
-        {//Apply render scaling factor
+        // 光影管线可以降低内部分辨率，但视口尺寸仍需使用整数像素。
+        {
             var factor = this.pipeline.getRenderScalingFactor();
             if (factor != null) {
-                width = (int) (width*factor[0]);
-                height = (int) (height*factor[1]);
+                width = (int) (width * factor[0]);
+                height = (int) (height * factor[1]);
             }
         }
         if (width == 0 || height == 0) {
@@ -244,7 +267,7 @@ public class VoxyRenderSystem {
                 .setScreenSize(width, height)
                 .update();
 
-        if (VoxyClient.getOcclusionDebugState()==0) {
+        if (VoxyClient.getOcclusionDebugState() == 0) {
             viewport.frameId++;
         }
 
@@ -257,9 +280,9 @@ public class VoxyRenderSystem {
             return false;
         }
         return mc.gameRenderer.getMainCamera().getEntity()
-                    instanceof net.minecraft.world.entity.LivingEntity living
-                && (living.hasEffect(net.minecraft.world.effect.MobEffects.BLINDNESS)
-                    || living.hasEffect(net.minecraft.world.effect.MobEffects.DARKNESS));
+                    instanceof LivingEntity living
+                && (living.hasEffect(MobEffects.BLINDNESS)
+                    || living.hasEffect(MobEffects.DARKNESS));
     }
 
     public static boolean restrictingMediumPresent() {
@@ -268,12 +291,12 @@ public class VoxyRenderSystem {
             return false;
         }
         var camera = mc.gameRenderer.getMainCamera();
-        if (camera.getFluidInCamera() != net.minecraft.world.level.material.FogType.NONE) {
+        if (camera.getFluidInCamera() != FogType.NONE) {
             return true;
         }
-        return camera.getEntity() instanceof net.minecraft.world.entity.LivingEntity living
-                && (living.hasEffect(net.minecraft.world.effect.MobEffects.BLINDNESS)
-                    || living.hasEffect(net.minecraft.world.effect.MobEffects.DARKNESS));
+        return camera.getEntity() instanceof LivingEntity living
+                && (living.hasEffect(MobEffects.BLINDNESS)
+                    || living.hasEffect(MobEffects.DARKNESS));
     }
 
     private static volatile float lastRenderFogEnd = -1;
@@ -281,17 +304,28 @@ public class VoxyRenderSystem {
     private static volatile boolean lastRenderSkipped;
 
 
-    //The fog RenderSystem holds while sodium's terrain pass runs, which is what
-    //ChunkShaderFogComponent feeds the chunk shaders - the ground truth for what the terrain beside
-    //the LOD is actually wearing.
+    // 记录 Sodium 地形阶段实际使用的雾范围，LOD 交接和调试信息都以此为准。
     private static volatile float terrainFogEndAtRender = -1;
     private static volatile float terrainFogStartAtRender = -1;
-    public static float getTerrainFogEndAtRender() { return terrainFogEndAtRender; }
+    public static float getTerrainFogEndAtRender() {
+        return terrainFogEndAtRender;
+    }
 
-    public static float getTerrainFogStartAtRender() { return terrainFogStartAtRender; }
-    public static float getLastRenderFogEnd() { return lastRenderFogEnd; }
-    public static float getLastRenderVanillaFar() { return lastRenderVanillaFar; }
-    public static boolean wasLastRenderSkipped() { return lastRenderSkipped; }
+    public static float getTerrainFogStartAtRender() {
+        return terrainFogStartAtRender;
+    }
+
+    public static float getLastRenderFogEnd() {
+        return lastRenderFogEnd;
+    }
+
+    public static float getLastRenderVanillaFar() {
+        return lastRenderVanillaFar;
+    }
+
+    public static boolean wasLastRenderSkipped() {
+        return lastRenderSkipped;
+    }
 
     private static boolean visionRestricted() {
         var mc = Minecraft.getInstance();
@@ -300,7 +334,7 @@ public class VoxyRenderSystem {
             return false;
         }
         if (!(mc.gameRenderer.getMainCamera().getEntity()
-                instanceof net.minecraft.world.entity.LivingEntity living)) {
+                instanceof LivingEntity living)) {
             lastRenderSkipped = false;
             return false;
         }
@@ -308,29 +342,27 @@ public class VoxyRenderSystem {
         float viewDistance = mc.options.getEffectiveRenderDistance() * 16.0f;
         float restricted = Float.MAX_VALUE;
 
-        var blindness = living.getEffect(net.minecraft.world.effect.MobEffects.BLINDNESS);
+        var blindness = living.getEffect(MobEffects.BLINDNESS);
         if (blindness != null) {
-            //FogRenderer.BlindnessFogFunction
+            // 与原版失明雾的持续时间衰减保持一致。
             restricted = blindness.isInfiniteDuration()
                     ? 5.0f
-                    : net.minecraft.util.Mth.lerp(
+                    : Mth.lerp(
                             Math.min(1.0f, blindness.getDuration() / 20.0f), viewDistance, 5.0f);
         }
 
-        var darkness = living.getEffect(net.minecraft.world.effect.MobEffects.DARKNESS);
+        var darkness = living.getEffect(MobEffects.DARKNESS);
         if (darkness != null) {
-            //FogRenderer.DarknessFogFunction. Blend factor ramps over 22 ticks at each end, so this
-            //tracks the pulse instead of snapping the world away the instant the effect appears.
+            // 黑暗效果有 22 tick 的渐变，使用同一 blend factor 避免 LOD 瞬间消失。
             float partialTick = mc.getTimer().getGameTimeDeltaPartialTick(false);
-            float f = net.minecraft.util.Mth.lerp(
+            float f = Mth.lerp(
                     darkness.getBlendFactor(living, partialTick), viewDistance, 15.0f);
             restricted = Math.min(restricted, f);
         }
 
         lastRenderFogEnd = restricted;
         lastRenderVanillaFar = viewDistance;
-        //Only once vanilla is actually showing less than the player's normal view is there nothing left
-        //for the LOD to add.
+        // 原版视距明显小于玩家正常视距时，LOD 才不再补充远景。
         boolean skip = restricted < viewDistance * 0.9f;
         lastRenderSkipped = skip;
         return skip;
@@ -381,35 +413,33 @@ public class VoxyRenderSystem {
 
     private void renderOpaqueNow(Viewport<?> viewport) {
 
-        //Cheap and idempotent; done here so the profiler can attribute work to the render thread
-        //without a ThreadLocal on every instrumented call
-        me.cortex.voxy.commonImpl.VoxyProfile.markRenderThread();
+        // 轻量且幂等；在这里标记渲染线程，避免每次采样都引入 ThreadLocal 开销。
+        VoxyProfile.markRenderThread();
         TimingStatistics.resetSamplers();
 
         TimingStatistics.all.start();
-        //Marks the frame as in-flight so the capture watchdog can sample this thread mid-stall
-        me.cortex.voxy.client.FrameProfiler.onFrameStart();
-        GPUTiming.INSTANCE.marker();//Start marker
+        // 标记帧正在执行，调试捕获器可以在 GPU/CPU 阻塞时采样。
+        FrameProfiler.onFrameStart();
+        GPUTiming.INSTANCE.marker();
         TimingStatistics.main.start();
 
         for (int i = 0; i < this.savedBufferBindings.length; i++) {
             this.savedBufferBindings[i] = glGetIntegeri(GL_SHADER_STORAGE_BUFFER_BINDING, i);
         }
 
-        //Assert the depth state rather than trusting whatever the previous renderer left behind - a
-        //foreign depthFunc/mask makes edge terrain flicker, with and without shaders.
-        com.mojang.blaze3d.platform.GlStateManager._enableDepthTest();
-        com.mojang.blaze3d.platform.GlStateManager._depthFunc(this.properties.closerEqualDepthCompare());
-        com.mojang.blaze3d.platform.GlStateManager._depthMask(true);
+        // 不依赖前一个渲染器留下的深度状态，避免边缘地形因比较函数或写掩码错误闪烁。
+        GlStateManager._enableDepthTest();
+        GlStateManager._depthFunc(this.properties.closerEqualDepthCompare());
+        GlStateManager._depthMask(true);
 
-        int oldFB = GL11.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
-        int boundFB = oldFB;
+        int previousFramebuffer = GL11.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
+        int boundFramebuffer = previousFramebuffer;
 
         glGetIntegerv(GL_VIEWPORT, this.viewportDimensions);
 
         glViewport(0, 0, viewport.width, viewport.height);
 
-        if (boundFB == 0) {
+        if (boundFramebuffer == 0) {
             throw new IllegalStateException("Cannot use the default framebuffer as cannot source from it");
         }
 
@@ -418,7 +448,7 @@ public class VoxyRenderSystem {
         TimingStatistics.E.start();
         GPUTiming.INSTANCE.marker("CB");
         if (!VoxyClient.disableSodiumChunkRender() && !IrisUtil.irisShadowActive()) {
-            me.cortex.voxy.common.world.WorldSection.setArrayPoolCapMiB(VoxyConfig.CONFIG.sectionArrayPoolMiB);
+            WorldSection.setArrayPoolCapMiB(VoxyConfig.CONFIG.sectionArrayPoolMiB);
             this.chunkBoundRenderer.render(viewport);
         } else {
             viewport.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
@@ -430,7 +460,7 @@ public class VoxyRenderSystem {
         GPUTiming.INSTANCE.marker();
         this.modelService.drainBlendPalette();
         // Run the LOD pipeline.
-        this.pipeline.runPipeline(viewport, boundFB, this.viewportDimensions[2], this.viewportDimensions[3]);
+        this.pipeline.runPipeline(viewport, boundFramebuffer, this.viewportDimensions[2], this.viewportDimensions[3]);
         GPUTiming.INSTANCE.marker();
 
 
@@ -439,9 +469,9 @@ public class VoxyRenderSystem {
 
         PrintfDebugUtil.tick();
 
-        //As much dynamic runtime stuff here
+        // 动态队列更新放在地形绘制后，减少渲染阶段的状态切换。
         {
-            //Tick upload stream (this is ok to do here as upload ticking is just memory management)
+            // 上传流 tick 只维护内存。
             UploadStream.INSTANCE.tick();
 
             this.renderDistanceTracker.setProcessRate(this.getTopLevelNodeProcessRate());
@@ -461,16 +491,17 @@ public class VoxyRenderSystem {
 
         GPUTiming.INSTANCE.tick();
 
-        glBindFramebuffer(GlConst.GL_FRAMEBUFFER, oldFB);
+        glBindFramebuffer(GlConst.GL_FRAMEBUFFER, previousFramebuffer);
         glViewport(this.viewportDimensions[0], this.viewportDimensions[1],
                 this.viewportDimensions[2], this.viewportDimensions[3]);
 
-        {//Reset state manager stuffs
+        // 恢复 Minecraft 和外部 shader 依赖的 GL 状态。
+        {
             glUseProgram(0);
             glEnable(GL_DEPTH_TEST);
             glDisable(GL_STENCIL_TEST);
 
-            GlStateManager._glBindVertexArray(0);//Clear binding
+            GlStateManager._glBindVertexArray(0);
 
             GlStateManager._activeTexture(GlConst.GL_TEXTURE1);
             for (int i = 0; i < 12; i++) {
@@ -482,17 +513,16 @@ public class VoxyRenderSystem {
 
             IrisUtil.clearIrisSamplers();
 
-            // Restore the shader-storage bindings captured before the LOD pass.
-        for (int i = 0; i < this.savedBufferBindings.length; i++) {
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, i, this.savedBufferBindings[i]);
+            // 恢复 LOD 绘制前保存的 shader-storage 绑定。
+            for (int i = 0; i < this.savedBufferBindings.length; i++) {
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, i, this.savedBufferBindings[i]);
             }
 
         }
 
         TimingStatistics.all.stop();
 
-        //No-op unless a capture is armed (/voxy debug capture)
-        me.cortex.voxy.client.FrameProfiler.onFrameEnd();
+        FrameProfiler.onFrameEnd();
     }
 
     private long getModelBakeBudgetNanos() {
@@ -530,11 +560,11 @@ public class VoxyRenderSystem {
         float INCREASE_PER_SECOND = 60;
         float DECREASE_PER_SECOND = 30;
         if (fps < MIN_FPS) {
-            VoxyConfig.CONFIG.subDivisionSize = Math.min(VoxyConfig.CONFIG.subDivisionSize + INCREASE_PER_SECOND / Math.max(1f, fps), 256);
+            VoxyConfig.CONFIG.subDivisionSize = Math.min(VoxyConfig.CONFIG.subDivisionSize + INCREASE_PER_SECOND / Math.max(1f, fps), VoxyConfig.MAX_SUBDIVISION_SIZE);
         }
 
         if (MAX_FPS < fps && canDecreaseSize) {
-            VoxyConfig.CONFIG.subDivisionSize = Math.max(VoxyConfig.CONFIG.subDivisionSize - DECREASE_PER_SECOND / Math.max(1f, fps), 28);
+            VoxyConfig.CONFIG.subDivisionSize = Math.max(VoxyConfig.CONFIG.subDivisionSize - DECREASE_PER_SECOND / Math.max(1f, fps), VoxyConfig.MIN_SUBDIVISION_SIZE);
         }
     }
 
@@ -606,10 +636,10 @@ public class VoxyRenderSystem {
         debug.add("mask " + maskView.chunkMaskWidth + "x" + maskView.chunkMaskHeight
                 + " | hiz " + maskView.hiZBuffer.describe());
         debug.add("maskReuse: " + this.chunkBoundRenderer.describeReuseState());
-        debug.add("arrayPool: " + me.cortex.voxy.common.world.WorldSection.getReuseCacheCount() / 4.0
+        debug.add("arrayPool: " + WorldSection.getReuseCacheCount() / 4.0
                 + "/" + VoxyConfig.CONFIG.sectionArrayPoolMiB + " MiB | miss "
-                + me.cortex.voxy.commonImpl.PerfStats.sectionArrayPoolMiss.sum()
-                + " overflow " + me.cortex.voxy.commonImpl.PerfStats.sectionArrayPoolOverflow.sum());
+                + PerfStats.sectionArrayPoolMiss.sum()
+                + " overflow " + PerfStats.sectionArrayPoolOverflow.sum());
         {
             this.modelService.addDebugData(debug);
             this.renderGen.addDebugData(debug);

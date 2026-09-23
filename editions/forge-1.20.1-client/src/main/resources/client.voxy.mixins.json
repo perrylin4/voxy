@@ -25,6 +25,7 @@
     "iris.MixinStandardMacros",
     // "minecraft.MixinBlockableEventLoop",
     "minecraft.MixinClientChunkCache",
+    "minecraft.MixinBeaconRenderer",
 //? if 1.20.1
     "sodium.AccessorSodiumOptionsGUI",
 

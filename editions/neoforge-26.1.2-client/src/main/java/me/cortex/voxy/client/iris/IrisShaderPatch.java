@@ -28,8 +28,9 @@ import net.irisshaders.iris.shaderpack.include.AbsolutePackPath;
 import org.lwjgl.opengl.ARBDrawBuffersBlend;
 import org.lwjgl.opengl.GL33;
 
+/** 26.1.2 NeoForge 的 Iris 扩展补丁解析器。 */
 public class IrisShaderPatch {
-   public static final int VERSION = ((IntSupplier)() -> 1).getAsInt();
+   public static final int VERSION = ((IntSupplier) () -> 1).getAsInt();
    public static final int SHADER_DEFINE_VERSION = 2;
    private final IrisShaderPatch.PatchGson patchData;
    private final ShaderPack pack;

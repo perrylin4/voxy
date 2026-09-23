@@ -9,6 +9,7 @@ layout(binding = 0, std140) uniform SceneUniform {
     float sceneBoundaryPadding2;
     float _scenePadding;
     vec4 worldCurveData;
+    vec4 trackReplacement;
 };
 
 //TODO: see if making the stride 2*4*4 bytes or something cause you get that 16 byte write

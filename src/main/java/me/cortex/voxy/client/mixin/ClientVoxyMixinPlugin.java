@@ -11,10 +11,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+/** 根据已加载模组选择客户端 Mixin，避免在专用服务端解析客户端类。 */
 public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
     private static boolean valkyrienSkiesInstalled;
     private static boolean nvidiumInstalled;
-    private static boolean connectorInstalled = false;
+    private static boolean connectorInstalled;
     private static boolean sableInstalled;
     private static boolean eclipticSeasonsInstalled;
     private static boolean createInstalled;
@@ -56,12 +57,14 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
     }
 
     @Override
-    public boolean shouldApplyMixin(String targetClassName, String mixinClassName) { return true; }
+    public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        return true;
+    }
 
-    @Override public List<String> getMixins() {
+    @Override
+    public List<String> getMixins() {
         List<String> mixins = new ArrayList<>();
-        // client.voxy.mixins.json is entirely client-rendering (sodium/iris/sable/eclipticseasons targets).
-        // None of it applies on a dedicated server and the targets don't exist there, so add nothing server-side.
+        // client 配置只声明渲染目标；专用服务端必须返回空列表，避免提前加载客户端类。
         if (FMLLoader.getDist() != Dist.CLIENT) {
             return mixins;
         }

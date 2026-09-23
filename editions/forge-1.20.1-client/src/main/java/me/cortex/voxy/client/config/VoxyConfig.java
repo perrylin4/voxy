@@ -18,11 +18,23 @@ import java.util.Locale;
 //? if 1.20.1
 import me.jellysquid.mods.sodium.client.gui.options.storage.OptionStorage;
 
+/** 1.20.1 Forge 的客户端配置；字段名保持旧 JSON 格式以兼容已有存档。 */
 public class VoxyConfig
 //? if 1.20.1
     implements OptionStorage<VoxyConfig>
 {
-    public enum LeafLodMode { FAST, BALANCED, QUALITY }
+    public enum LeafLodMode {
+        FAST,
+        BALANCED,
+        QUALITY
+    }
+
+    public static final int MIN_REQUEST_DISTANCE = 8;
+    public static final int MAX_REQUEST_DISTANCE = 48;
+    public static final float MIN_SUBDIVISION_SIZE = 28.0f;
+    public static final float MAX_SUBDIVISION_SIZE = 1024.0f;
+    public static final int DEFAULT_RENDER_QUALITY_LEVEL = 3;
+    private static final float[] RENDER_QUALITY_SIZES = {1024, 768, 512, 256, 123, 64, 28};
     private static final Gson GSON = new GsonBuilder()
             .setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES)
             .setPrettyPrinting()
@@ -37,7 +49,7 @@ public class VoxyConfig
     public int lodDistance = 64;
     public float sectionRenderDistance = 16;
     public int serviceThreads = (int) Math.max(CpuLayout.getCoreCount()/1.5, 1);
-    public float subDivisionSize = 64;
+    public float subDivisionSize = RENDER_QUALITY_SIZES[DEFAULT_RENDER_QUALITY_LEVEL];
     public int skyFogDistance = 96;
     public float fogIntensity = 1.0f;
     public float fogDensity = 0.0f;
@@ -54,6 +66,16 @@ public class VoxyConfig
     public int requestDistance = 48;
     public boolean showJoinMessage = true;
     public boolean upgradeCleanupNoticeShown = false;
+    public boolean distantBeacons = true;
+    public int distantBeaconMaxChunks = 0;
+    public boolean distantContraptions = true;
+    public int distantContraptionMaxChunks = 0;
+    public boolean distantTrains = true;
+    public int distantTrainMaxChunks = 0;
+    public boolean distantTracks = true;
+    public int distantTrackMaxChunks = 0;
+    public boolean distantKinetics = true;
+    public int distantKineticMaxChunks = 0;
 
     public String ssaoMode;
 
@@ -62,6 +84,28 @@ public class VoxyConfig
     public int getRenderPressureLevel() {
         if (this.renderPressure < 0 || this.renderPressure > 4) this.renderPressure = 2;
         return this.renderPressure;
+    }
+
+    /** 将旧版细分值映射到设置页使用的七档渲染精度。 */
+    public int getRenderQualityLevel() {
+        if (!Float.isFinite(this.subDivisionSize) || this.subDivisionSize <= 0) {
+            return DEFAULT_RENDER_QUALITY_LEVEL;
+        }
+        int closest = 0;
+        double distance = Double.POSITIVE_INFINITY;
+        for (int i = 0; i < RENDER_QUALITY_SIZES.length; i++) {
+            double candidate = Math.abs(Math.log(this.subDivisionSize / RENDER_QUALITY_SIZES[i]));
+            if (candidate < distance) {
+                closest = i;
+                distance = candidate;
+            }
+        }
+        return closest;
+    }
+
+    /** 将设置页档位转换回兼容旧配置格式的细分值。 */
+    public void setRenderQualityLevel(int level) {
+        this.subDivisionSize = RENDER_QUALITY_SIZES[clamp(level, 0, RENDER_QUALITY_SIZES.length - 1)];
     }
 
     public LeafLodMode getLeafLodMode() {
@@ -137,13 +181,18 @@ public class VoxyConfig
 
     public void sanitize() {
         this.sectionRenderDistance = clamp(this.sectionRenderDistance, 2.0f, 64.0f);
-        this.subDivisionSize = clamp(this.subDivisionSize, 28.0f, 256.0f);
+        this.subDivisionSize = clamp(this.subDivisionSize, MIN_SUBDIVISION_SIZE, MAX_SUBDIVISION_SIZE);
         this.skyFogDistance = clamp(this.skyFogDistance, 0, 1024);
         this.fogIntensity = clamp(this.fogIntensity, 0.0f, 1.0f);
         this.fogDensity = clamp(this.fogDensity, 0.0f, 1.0f);
         this.fogDistancePercent = clamp(this.fogDistancePercent, 5, 200);
         this.biomeBlendRadius = clamp(this.biomeBlendRadius, 0, 7);
-        this.requestDistance = clamp(this.requestDistance, 8, 48);
+        this.requestDistance = clamp(this.requestDistance, MIN_REQUEST_DISTANCE, MAX_REQUEST_DISTANCE);
+        this.distantBeaconMaxChunks = clamp(this.distantBeaconMaxChunks, 0, 512);
+        this.distantContraptionMaxChunks = clamp(this.distantContraptionMaxChunks, 0, 512);
+        this.distantTrainMaxChunks = clamp(this.distantTrainMaxChunks, 0, 512);
+        this.distantTrackMaxChunks = clamp(this.distantTrackMaxChunks, 0, 512);
+        this.distantKineticMaxChunks = clamp(this.distantKineticMaxChunks, 0, 512);
         this.lodDistance = clamp(this.lodDistance, 2, 64);
         if (!"water".equals(this.biomeBlendScope) && !"water_grass".equals(this.biomeBlendScope)) {
             this.biomeBlendScope = "water";
@@ -151,7 +200,9 @@ public class VoxyConfig
         this.setLeafLodMode(this.getLeafLodMode());
     }
 
-    public int getRequestDistance() { return clamp(this.requestDistance, 8, 48); }
+    public int getRequestDistance() {
+        return clamp(this.requestDistance, MIN_REQUEST_DISTANCE, MAX_REQUEST_DISTANCE);
+    }
 
     public int getLodRenderDistanceBlocks() {
         return clamp(Math.round(this.sectionRenderDistance * 32.0f * 16.0f), 64, 32768);

@@ -43,7 +43,7 @@ import static org.lwjgl.opengl.GL11C.glStencilOp;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 
-/** Draws Domum shingles from their real baked model instead of Voxy's six-face impostor. */
+/** 使用 Domum 的真实烘焙模型绘制远景网格，避免六面代理模型丢失瓦片形状。 */
 public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
     private static final int MAX_BAKES_PER_TICK = 1;
     private static volatile DomumDistantRenderer active;
@@ -56,6 +56,8 @@ public final class DomumDistantRenderer implements LodPipelineHooks.Renderer {
     private ClientLevel level;
     private int lastScanX = Integer.MIN_VALUE;
     private int lastScanZ = Integer.MIN_VALUE;
+
+    // ---- 生命周期、队列与绘制 -----------------------------------------
 
     public DomumDistantRenderer() {
         active = this;

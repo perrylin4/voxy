@@ -14,6 +14,7 @@ import java.nio.ByteBuffer;
 import java.util.function.ToIntFunction;
 import java.util.function.Predicate;
 
+/** 在 CPU 端收集兼容模组网格，并按固定顶点步长上传到 GPU。 */
 public final class DistantMeshBuilder {
     private ByteBuffer buffer;
     private int vertexCount;
@@ -25,7 +26,9 @@ public final class DistantMeshBuilder {
         this.buffer = MemoryUtil.memAlloc(64 * 1024);
     }
 
-    //Raw vertex entry for captured geometry (e.g. bogey renderers streaming into a capture consumer)
+    // ---- 顶点写入 ------------------------------------------------------
+
+    // 捕获渲染器流式提交的原始顶点（例如 Create bogey）。
     public void rawVertex(float x, float y, float z, float u, float v, int skyLight, int blockLight, float shade, int face) {
         this.rawVertex(x, y, z, u, v, skyLight, blockLight, shade, face, 0xFFFFFF);
     }

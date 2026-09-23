@@ -30,6 +30,7 @@ layout(location = 0) out flat uvec4 interData;
 layout(location = 1) out vec2 uv;
 #endif
 layout(location = 2) out float boundaryDistanceSquared;
+layout(location = 3) out vec3 trackLocalPosition;
 
 #ifdef USE_NV_JANK
 #ifdef GL_NV_gpu_shader5
@@ -57,7 +58,8 @@ void main() {
 
     uint cornerId = gl_VertexID&3;
 
-    vec3 boundaryOffset = getQuadCornerPoint(quad, cornerId) - cameraSubPos;
+    trackLocalPosition = getQuadCornerPoint(quad, cornerId);
+    vec3 boundaryOffset = trackLocalPosition - cameraSubPos;
     boundaryDistanceSquared = dot(boundaryOffset, boundaryOffset);
 
     gl_Position =

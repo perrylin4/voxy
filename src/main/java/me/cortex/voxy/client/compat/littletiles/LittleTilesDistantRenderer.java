@@ -6,19 +6,24 @@ import me.cortex.voxy.client.compat.create.DistantMeshBuilder;
 import me.cortex.voxy.client.compat.create.DistantShaders;
 import me.cortex.voxy.client.compat.create.DistantVisibility;
 import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.client.core.AbstractRenderPipeline;
+import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.client.core.rendering.Viewport;
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.section.SectionStorage;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import me.cortex.voxy.commonImpl.compat.littletiles.LittleTilesCompat;
 import me.cortex.voxy.commonImpl.compat.littletiles.LittleTilesStore;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.Direction;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.client.model.data.ModelData;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
@@ -54,6 +59,7 @@ import static org.lwjgl.opengl.GL11C.GL_SRC_ALPHA;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 
+/** LittleTiles 微方块快照的索引、异步烘焙和远景绘制。 */
 public final class LittleTilesDistantRenderer implements LodPipelineHooks.Renderer, LodPipelineHooks.TranslucentRenderer {
     private static final int BUCKET_SHIFT = 3;
     private static final int BUCKET_BLOCKS = 16 << BUCKET_SHIFT;
@@ -99,6 +105,8 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
         LittleTilesDistantRenderer renderer = active;
         if (renderer != null) renderer.checkpoint();
     }
+
+    // ---- 生命周期与候选区段 -------------------------------------------
 
     @SubscribeEvent
     public void tick(ClientTickEvent.Post event) {
@@ -154,18 +162,20 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
         this.updates.clear();
     }
 
+    // ---- 绘制 ----------------------------------------------------------
+
     @Override
-    public void render(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline, Viewport<?> viewport, int depthFunc) {
+    public void render(AbstractRenderPipeline pipeline, Viewport<?> viewport, int depthFunc) {
         renderMeshes(pipeline, viewport, depthFunc, false);
     }
 
     @Override
-    public void renderTranslucent(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline,
+    public void renderTranslucent(AbstractRenderPipeline pipeline,
                                   Viewport<?> viewport, int depthFunc) {
         renderMeshes(pipeline, viewport, depthFunc, true);
     }
 
-    private void renderMeshes(me.cortex.voxy.client.core.AbstractRenderPipeline pipeline,
+    private void renderMeshes(AbstractRenderPipeline pipeline,
                               Viewport<?> viewport, int depthFunc, boolean translucent) {
         if (this.sections.isEmpty() || !VoxyConfig.CONFIG.isRenderingEnabled()
                 || !VoxyConfig.CONFIG.distantLittleTiles) return;
@@ -230,6 +240,8 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
         }
     }
 
+    // ---- CPU 烘焙与材质采样 -------------------------------------------
+
     private static CpuMeshes bake(LittleTilesCompat.SectionSnapshot snapshot, MaterialSample[] materials) {
         var occupied = new it.unimi.dsi.fastutil.ints.IntOpenHashSet(snapshot.cells().size() * 2);
         for (var cell : snapshot.cells()) occupied.add(cell.coordinate());
@@ -256,7 +268,7 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
         } catch (Throwable t) {
             opaqueBuilder.discard();
             translucentBuilder.discard();
-            me.cortex.voxy.common.Logger.error("Baking LittleTiles LOD mesh", t);
+            Logger.error("Baking LittleTiles LOD mesh", t);
             return null;
         }
     }
@@ -289,7 +301,7 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
         var pos = new BlockPos(snapshot.sx() * 16 + 8, snapshot.sy() * 16 + 8, snapshot.sz() * 16 + 8);
         for (int i = 0; i < samples.length; i++) {
             BlockState state = snapshot.materials().get(i).state();
-            var modelData = net.neoforged.neoforge.client.model.data.ModelData.EMPTY;
+            var modelData = ModelData.EMPTY;
             var model = mc.getBlockRenderer().getBlockModel(state);
             TextureAtlasSprite fallback = model.getParticleIcon(modelData);
             float[] u = new float[6], v = new float[6];
@@ -324,13 +336,15 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
 
     private static int shaderMaterialId(BlockState state) {
         try {
-            if (!me.cortex.voxy.client.core.util.IrisUtil.IRIS_INSTALLED) return 0;
+            if (!IrisUtil.IRIS_INSTALLED) return 0;
             var ids = net.irisshaders.iris.shaderpack.materialmap.WorldRenderingSettings.INSTANCE.getBlockStateIds();
             return ids != null && ids.containsKey(state) ? ids.getInt(state) : 0;
         } catch (Throwable ignored) {
             return 0;
         }
     }
+
+    // ---- 候选索引、异步队列与资源回收 -------------------------------
 
     private void refreshCandidates(double cameraX, double cameraY, double cameraZ, double maxDistance) {
         int bucketX = Math.floorDiv((int) Math.floor(cameraX), BUCKET_BLOCKS);
@@ -386,7 +400,7 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
             try {
                 materials = prepareMaterials(entry.snapshot);
             } catch (Throwable t) {
-                me.cortex.voxy.common.Logger.error("Preparing LittleTiles LOD materials", t);
+                Logger.error("Preparing LittleTiles LOD materials", t);
                 continue;
             }
             int generation = this.worldGeneration;
@@ -398,7 +412,7 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
                 try {
                     mesh = bake(snapshot, materials);
                 } catch (Throwable t) {
-                    me.cortex.voxy.common.Logger.error("Baking LittleTiles LOD mesh", t);
+                    Logger.error("Baking LittleTiles LOD mesh", t);
                 }
                 this.completedBakes.add(new BakeResult(key, generation, snapshot, mesh));
             });
@@ -477,11 +491,11 @@ public final class LittleTilesDistantRenderer implements LodPipelineHooks.Render
         try {
             this.storage.flush();
         } catch (Throwable t) {
-            me.cortex.voxy.common.Logger.error("Flushing LittleTiles LOD snapshots", t);
+            Logger.error("Flushing LittleTiles LOD snapshots", t);
         }
     }
 
-    private void drainUpdates(int limit, net.minecraft.world.phys.Vec3 camera, double maxDistanceSq) {
+    private void drainUpdates(int limit, Vec3 camera, double maxDistanceSq) {
         Update update;
         int applied = 0;
         while (applied < limit && (update = this.updates.poll()) != null) {

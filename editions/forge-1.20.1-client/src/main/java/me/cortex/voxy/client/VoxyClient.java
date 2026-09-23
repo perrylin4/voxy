@@ -53,6 +53,20 @@ public abstract class VoxyClient {
 
             VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
 
+            me.cortex.voxy.client.compat.LodPipelineHooks.register(
+                    me.cortex.voxy.client.core.beacon.DistantBeaconRenderer.INSTANCE);
+            if (isClassAvailable("com.simibubi.create.Create")) {
+                var createRenderer = me.cortex.voxy.client.compat.create.DistantCreateRenderer.INSTANCE;
+                net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(createRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.register(createRenderer);
+                var kineticRenderer = me.cortex.voxy.client.compat.create.DistantKineticRenderer.INSTANCE;
+                net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(kineticRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.register(kineticRenderer);
+                var trackRenderer = me.cortex.voxy.client.compat.create.DistantTrackRenderer.INSTANCE;
+                net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(trackRenderer);
+                me.cortex.voxy.client.compat.LodPipelineHooks.register(trackRenderer);
+            }
+
             if (!Capabilities.INSTANCE.subgroup) {
                 Logger.warn("GPU does not support subgroup operations, expect some performance degradation");
             }
@@ -74,6 +88,15 @@ public abstract class VoxyClient {
 
     public static int getOcclusionDebugState() {
         return 0;
+    }
+
+    private static boolean isClassAvailable(String name) {
+        try {
+            Class.forName(name, false, VoxyClient.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError ignored) {
+            return false;
+        }
     }
 
     public static boolean disableSodiumChunkRender() {

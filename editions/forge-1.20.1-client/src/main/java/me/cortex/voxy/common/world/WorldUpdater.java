@@ -6,11 +6,10 @@ import me.cortex.voxy.commonImpl.VoxyCommon;
 
 import static me.cortex.voxy.common.world.WorldEngine.*;
 
+/** 1.20.1 Forge 的区段聚合器，沿父级 LOD 层传播体素和邻居脏标记。 */
 public class WorldUpdater {
-    //Executes an update to the world and automatically updates all the parent mip layers up to level 4 (e.g. where 1 chunk section is 1 block big)
-
-    //NOTE: THIS RUNS ON THE THREAD IT WAS EXECUTED ON, when this method exits, the calling method may assume that VoxelizedSection is no longer needed
-    public static void insertUpdate(WorldEngine into, VoxelizedSection section) {//TODO: add a bitset of levels to update and if it should force update
+    /** 在调用线程完成区段写入；返回前调用方可以释放输入快照。 */
+    public static void insertUpdate(WorldEngine into, VoxelizedSection section) {
 
         //Do some very cheeky stuff for MiB
         if (VoxyCommon.IS_MINE_IN_ABYSS) {

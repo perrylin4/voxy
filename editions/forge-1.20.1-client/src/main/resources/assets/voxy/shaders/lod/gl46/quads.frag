@@ -22,6 +22,8 @@ layout(location = 0) in flat uvec4 interData;
 layout(location = 1) in vec2 uv;
 #endif
 layout(location = 2) in float boundaryDistanceSquared;
+layout(location = 3) in vec3 trackLocalPosition;
+layout(binding = 2, std430) readonly buffer TrackReplacementBlocks { ivec4 replacedTracks[]; };
 
 #ifdef DEBUG_RENDER
 layout(location = 7) in flat uint quadDebug;
@@ -169,7 +171,29 @@ vec4 computeColour(vec2 texturePos, vec4 colour) {
 #endif
 
 
+bool hasDedicatedTrack() {
+    if (trackReplacement.x < 0.5 || ((interData.w >> 14u) & 1u) == 0u) return false;
+    uint face = (interData.x >> 4u) & 7u;
+    vec3 inside = trackLocalPosition;
+    uint axis = face < 2u ? 1u : (face < 4u ? 2u : 0u);
+    inside[axis] += (face & 1u) == 0u ? 0.001 : -0.001;
+    ivec3 block = ivec3(floor(inside)) + baseSectionPos * 32;
+    vec3 origin = vec3((block >> 4) * 16 - baseSectionPos * 32) - cameraSubPos;
+    float distanceSq = dot(origin, origin);
+    if (distanceSq < trackReplacement.y || distanceSq > trackReplacement.z) return false;
+    uint mask = uint(replacedTracks.length()) - 1u;
+    uint slot = (uint(block.x) * 73856093u ^ uint(block.y) * 19349663u ^ uint(block.z) * 83492791u) & mask;
+    for (uint i = 0u; i <= mask; i++) {
+        ivec4 entry = replacedTracks[slot];
+        if (entry.w == 0) return false;
+        if (all(equal(entry.xyz, block))) return true;
+        slot = (slot + 1u) & mask;
+    }
+    return false;
+}
+
 void main() {
+    if (hasDedicatedTrack()) discard;
 //vec2 uv = vec2(0);
     //Tile is the tile we are in
     vec2 tile;

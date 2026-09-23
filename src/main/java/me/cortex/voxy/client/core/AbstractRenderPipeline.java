@@ -45,6 +45,7 @@ import static org.lwjgl.opengl.GL45.glClearNamedFramebufferfi;
 import static org.lwjgl.opengl.GL45.glGetNamedFramebufferAttachmentParameteri;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 
+/** LOD 渲染管线的公共生命周期、深度交接和区段遍历实现。 */
 public abstract class AbstractRenderPipeline extends TrackedObject {
     public final RenderProperties properties;
     private final BooleanSupplier frexStillHasWork;

@@ -38,6 +38,7 @@ import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import org.lwjgl.system.MemoryUtil;
 
+/** 26.1.2 NeoForge 的方块/生物群系 ID 映射器，编码布局与渲染器约定一致。 */
 public class Mapper {
    private static final long SURFACE_CARRIER_BLOCK_MASK = (1L << 20) - 1L;
    private static final long SURFACE_CARRIER_FLAG = 1L << 20;

@@ -53,6 +53,7 @@ import org.lwjgl.opengl.ARBDirectStateAccess;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryUtil;
 
+/** 26.1.2 NeoForge 的模型、材质和元数据缓存协调器。 */
 public class ModelFactory {
    public static final int MODEL_TEXTURE_SIZE = 16;
    public static final int LAYERS = Integer.numberOfTrailingZeros(16);
@@ -76,6 +77,8 @@ public class ModelFactory {
    private final ConcurrentLinkedDeque<ModelFactory.ResultUploader> uploadResults = new ConcurrentLinkedDeque<>();
    private Object2IntMap<BlockState> customBlockStateIdMapping;
    private final ConcurrentLinkedDeque<Mapper.BiomeEntry> biomeQueue = new ConcurrentLinkedDeque<>();
+
+   // ---- 模型登记与异步上传 -------------------------------------------
 
    public ModelFactory(Mapper mapper, ModelStore storage) {
       this.mapper = mapper;

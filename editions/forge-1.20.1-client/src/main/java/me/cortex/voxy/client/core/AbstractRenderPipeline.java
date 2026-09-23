@@ -121,6 +121,9 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
         rs.postOpaquePreperation(viewport);
 
+        me.cortex.voxy.client.compat.LodPipelineHooks.beforeTranslucent(
+                this, viewport, this.properties.closerEqualDepthCompare());
+
         this.postOpaquePreTranslucent(viewport, sourceFrameBuffer);
         GPUTiming.INSTANCE.marker("RT");
 

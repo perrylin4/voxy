@@ -2,6 +2,8 @@ package me.cortex.voxy.client.compat.create;
 
 import me.cortex.voxy.client.compat.LodPipelineHooks;
 import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.client.core.AbstractRenderPipeline;
+import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.BogeyPose;
 import me.cortex.voxy.commonImpl.compat.create.DistantTrainProtocol.ShapeBogey;
@@ -13,6 +15,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import org.joml.Matrix4f;
 import org.joml.Math;
+import org.lwjgl.system.MemoryStack;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -32,6 +35,11 @@ import static org.lwjgl.opengl.GL11C.glColorMask;
 import static org.lwjgl.opengl.GL11C.glStencilFunc;
 import static org.lwjgl.opengl.GL11C.glStencilOp;
 import static org.lwjgl.opengl.GL20C.glUniform2f;
+import static org.lwjgl.opengl.GL20C.glUniform1i;
+import static org.lwjgl.opengl.GL20C.glUniformMatrix4fv;
+import static org.lwjgl.opengl.GL33C.glBindSampler;
+import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
+import static org.lwjgl.opengl.GL11C.GL_GEQUAL;
 import static org.lwjgl.opengl.GL20C.glUseProgram;
 import static org.lwjgl.opengl.GL30C.glBindVertexArray;
 import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
@@ -280,7 +288,8 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
         draw.model.set(model);
     }
 
-    public static void replayDepthToSource(Viewport<?> viewport, int framebuffer, int width, int height, int depthFunc) {
+    public static void replayDepthToSource(AbstractRenderPipeline pipeline, Viewport<?> viewport,
+                                           int lodDepthTexture, int framebuffer, int width, int height, int depthFunc) {
         if (depthViewport != viewport || depthDrawCount == 0 || width <= 0 || height <= 0) {
             return;
         }
@@ -292,15 +301,26 @@ public final class DistantTrainRenderer implements LodPipelineHooks.Renderer {
         glDepthMask(true);
         glDisable(GL_STENCIL_TEST);
         glDisable(GL_CULL_FACE);
-        DistantShaders.depthOnly().bind();
+        DistantShaders.depthOnly(pipeline).bind();
+        pipeline.bindUniforms();
+        glBindTextureUnit(2, lodDepthTexture);
+        glBindSampler(2, 0);
+        boolean halfNdc = RenderProperties.windowIsHalfNdc();
+        glUniform2f(12, halfNdc ? 0.5f : 1.0f, halfNdc ? 0.5f : 0.0f);
+        glUniform1i(13, depthFunc == GL_GEQUAL ? 1 : 0);
         DistantShaders.bindTextures();
 
         var sourceViewProjection = new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView);
         var transform = new Matrix4f();
-        for (int i = 0; i < depthDrawCount; i++) {
-            var draw = DEPTH_DRAWS.get(i);
-            DistantShaders.uploadTransform(transform.set(sourceViewProjection).mul(draw.model));
-            draw.mesh.draw();
+        try (var stack = MemoryStack.stackPush()) {
+            var lodTransform = stack.mallocFloat(16);
+            for (int i = 0; i < depthDrawCount; i++) {
+                var draw = DEPTH_DRAWS.get(i);
+                transform.set(viewport.MVP).mul(draw.model).get(lodTransform);
+                glUniformMatrix4fv(8, false, lodTransform);
+                DistantShaders.uploadTransform(transform.set(sourceViewProjection).mul(draw.model));
+                draw.mesh.draw();
+            }
         }
         glBindVertexArray(0);
         glUseProgram(0);

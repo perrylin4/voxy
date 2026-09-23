@@ -25,8 +25,6 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 
-import org.lwjgl.system.MemoryUtil;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -38,9 +36,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
+import org.lwjgl.system.MemoryUtil;
 
-//There are independent mappings for biome and block states, these get combined in the shader and allow for more
-// variaty of things
+/** 管理方块状态、生物群系和变体 ID，并编码为渲染器使用的 64 位体素值。 */
 public class Mapper {
     private static final long SURFACE_CARRIER_BLOCK_MASK = (1L << 20) - 1L;
     private static final long SURFACE_CARRIER_FLAG = 1L << 20;
@@ -77,6 +75,8 @@ public class Mapper {
         this.loadFromStorage();
     }
 
+
+    // ---- 64 位体素编码 -----------------------------------------------
 
     public static boolean isAir(long id) {
         //Note: air can mean void, cave or normal air, as the block state is remapped during ingesting
@@ -135,6 +135,8 @@ public class Mapper {
                 withBlockBiome(below, (int) (carrier & SURFACE_CARRIER_BLOCK_MASK), getBiomeId(carrier)),
                 getLightId(carrier));
     }
+
+    // ---- 持久化映射 ----------------------------------------------------
 
     public void setStateCallback(Consumer<StateEntry> stateCallback) {
         this.newStateCallback = stateCallback;
@@ -220,6 +222,8 @@ public class Mapper {
             this.forceResaveStates();
         }
     }
+
+    // ---- 状态/生物群系查询与注册 --------------------------------------
 
     public final int getBlockStateCount() {
         return this.blockId2stateEntry.size();
@@ -381,6 +385,8 @@ public class Mapper {
         return (Byte.toUnsignedLong(light)<<56)|(Integer.toUnsignedLong(biomeId) << 47)|(Integer.toUnsignedLong(blockId)<<27);
     }
 
+    // ---- 存储维护与生命周期 -------------------------------------------
+
     public StateEntry[] getStateEntries() {
         this.blockLock.lock();
         var set = new ArrayList<>(this.blockId2stateEntry);
@@ -449,6 +455,7 @@ public class Mapper {
     }
 
 
+    /** 一个可持久化的方块状态映射，包括可选的兼容模组变体信息。 */
     public static final class StateEntry {
         public final int id;
         public final BlockState state;
@@ -582,6 +589,7 @@ public class Mapper {
         }
     }
 
+    /** 一个可持久化的生物群系映射条目。 */
     public static final class BiomeEntry {
         public final int id;
         public final String biome;

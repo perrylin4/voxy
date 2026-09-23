@@ -10,11 +10,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+/** 选择通用/服务端兼容 Mixin；客户端专属目标由 ClientVoxyMixinPlugin 处理。 */
 public class CommonVoxyMixinPlugin implements IMixinConfigPlugin {
     private boolean sableInstalled;
     private boolean createInstalled;
     private boolean simpleBackupsInstalled;
 
+    /** 仅查询加载列表，不触发模组类初始化。 */
     private static boolean modOnLoadingList(String id) {
         try {
             var ll = FMLLoader.getLoadingModList();
